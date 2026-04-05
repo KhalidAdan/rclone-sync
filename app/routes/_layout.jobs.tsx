@@ -1,13 +1,12 @@
 import { desc, eq, sql } from "drizzle-orm";
 import { useEffect } from "react";
-import { Form, useRevalidator } from "react-router";
+import { Form, useRevalidator, Link } from "react-router";
 import { JobHistory } from "../components/JobHistory";
 import { db } from "../db/client.server";
 import { jobs } from "../db/schema";
 import { config } from "../lib/config.server";
 import { startOrQueueArchive } from "../lib/archiver.server";
 import { getStats } from "../lib/rclone.server";
-import type { Route } from "./+types/_layout.jobs";
 
 type StatusMeta = {
   label: string;
@@ -35,20 +34,32 @@ const fallbackMeta: StatusMeta = {
   borderClass: "border-l-gray-300",
 };
 
-export async function loader() {
-  const allJobs = await db.query.jobs.findMany({
+export async function loader({ request }: { request: Request }) {
+  const url = new URL(request.url);
+  const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
+  const limit = 20;
+  const offset = (page - 1) * limit;
+
+  const [countResult] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(jobs);
+  const totalCount = countResult?.count ?? 0;
+  const totalPages = Math.ceil(totalCount / limit);
+
+  const pageJobs = await db.query.jobs.findMany({
     with: { events: true },
     orderBy: [desc(jobs.updatedAt)],
+    limit,
+    offset,
   });
 
   // Check for STAGED jobs and trigger first one to archive
-  const stagedJobs = allJobs.filter((j) => j.status === "STAGED");
+  const stagedJobs = pageJobs.filter((j) => j.status === "STAGED");
   if (stagedJobs.length > 0) {
-    // Start archiving the first staged job - this will queue the rest
     await startOrQueueArchive(stagedJobs[0].id);
   }
 
-  const archiving = allJobs.find((j) => j.status === "ARCHIVING");
+  const archiving = pageJobs.find((j) => j.status === "ARCHIVING");
   let liveProgress = null;
 
   if (archiving) {
@@ -71,13 +82,18 @@ export async function loader() {
   }
 
   return {
-    jobs: allJobs,
+    jobs: pageJobs,
     liveProgress,
     refreshInterval: config.uiRefreshIntervalSec,
+    page,
+    totalPages,
+    totalCount,
+    hasPrev: page > 1,
+    hasNext: page < totalPages,
   };
 }
 
-export async function action({ request }: Route.ActionArgs) {
+export async function action({ request }: { request: Request }) {
   const formData = await request.formData();
   const intent = formData.get("intent");
   const jobId = formData.get("jobId") as string;
@@ -122,8 +138,8 @@ function formatEta(seconds: number) {
   return `${Math.round(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}m`;
 }
 
-export default function Jobs({ loaderData }: Route.ComponentProps) {
-  const { jobs: allJobs, liveProgress, refreshInterval } = loaderData;
+export default function Jobs({ loaderData }: { loaderData: Awaited<ReturnType<typeof loader>> }) {
+  const { jobs: allJobs, liveProgress, refreshInterval, page, totalPages, totalCount, hasPrev, hasNext } = loaderData;
   const revalidator = useRevalidator();
 
   const hasActiveJob = allJobs.some((j) =>
@@ -254,6 +270,39 @@ export default function Jobs({ loaderData }: Route.ComponentProps) {
             );
           })}
         </ul>
+      )}
+
+      {totalCount > 0 && (
+        <div className="flex items-center justify-between pt-4 border-t border-gray-200">
+          <p className="text-sm text-gray-500">
+            Showing {((page - 1) * 20) + 1}–{Math.min(page * 20, totalCount)} of {totalCount} jobs
+          </p>
+          <div className="flex gap-2">
+            <Link
+              to={`/jobs?page=${page - 1}`}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg border ${
+                hasPrev
+                  ? "border-gray-300 text-gray-700 hover:bg-gray-50"
+                  : "border-gray-100 text-gray-300 pointer-events-none"
+              }`}
+            >
+              ← Previous
+            </Link>
+            <span className="px-3 py-1.5 text-xs text-gray-400">
+              Page {page} of {totalPages}
+            </span>
+            <Link
+              to={`/jobs?page=${page + 1}`}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg border ${
+                hasNext
+                  ? "border-gray-300 text-gray-700 hover:bg-gray-50"
+                  : "border-gray-100 text-gray-300 pointer-events-none"
+              }`}
+            >
+              Next →
+            </Link>
+          </div>
+        </div>
       )}
     </div>
   );
