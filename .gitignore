@@ -1,0 +1,13 @@
+.DS_Store
+.env
+/node_modules/
+
+# React Router
+/.react-router/
+/build/
+
+# Local data (database and staging - never commit these)
+/data/
+*.db
+*.db-shm
+*.db-wal
