@@ -1,4 +1,5 @@
 import { ZodError, z } from "zod";
+import { logger } from "./logger.server";
 
 const envSchema = z.object({
   NODE_ENV: z
@@ -17,11 +18,11 @@ try {
   envSchema.parse(process.env);
 } catch (e) {
   if (e instanceof ZodError) {
-    console.error("Missing or invalid environment variables:", e.issues);
+    logger.error("Missing or invalid environment variables:", { issues: e.issues });
   } else {
-    console.error(
+    logger.error(
       "An unknown error occurred while parsing env variables:",
-      e,
+      { error: String(e) },
     );
   }
   throw e;

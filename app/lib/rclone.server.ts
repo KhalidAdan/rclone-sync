@@ -1,5 +1,6 @@
 import "@/lib/env.server";
 import { config } from "./config.server";
+import { logger } from "./logger.server";
 
 export interface RcloneJobStatus {
   finished: boolean;
@@ -26,7 +27,7 @@ export async function copyFile(
   dstFs: string,
   dstRemote: string
 ): Promise<{ jobid: number }> {
-  console.log("[rclone.copyFile] Request:", { srcFs, srcRemote, dstFs, dstRemote });
+  logger.debug("[rclone.copyFile] Request:", { srcFs, srcRemote, dstFs, dstRemote });
   
   const res = await fetch(`${config.rcloneUrl}/operations/copyfile`, {
     method: "POST",
@@ -41,10 +42,10 @@ export async function copyFile(
   });
   
   const data = await res.json();
-  console.log("[rclone.copyFile] Response:", data);
+  logger.debug("[rclone.copyFile] Response:", data);
   
   if (data.error) {
-    console.error("[rclone.copyFile] Error:", data.error);
+    logger.error("[rclone.copyFile] Error:", { error: data.error });
     throw new Error(data.error);
   }
   return { jobid: data.jobid };
@@ -54,7 +55,7 @@ export async function listFiles(
   fs: string,
   remote: string
 ): Promise<{ list: RcloneListEntry[] }> {
-  console.log("[rclone.listFiles] Request:", { fs, remote });
+  logger.debug("[rclone.listFiles] Request:", { fs, remote });
   
   const res = await fetch(`${config.rcloneUrl}/operations/list`, {
     method: "POST",
@@ -63,13 +64,13 @@ export async function listFiles(
   });
   
   const data = await res.json();
-  console.log("[rclone.listFiles] Response:", data);
+  logger.debug("[rclone.listFiles] Response:", data);
   
   return { list: data.list || [] };
 }
 
 export async function getJobStatus(jobid: number): Promise<RcloneJobStatus> {
-  console.log("[rclone.getJobStatus] Request:", { jobid });
+  logger.debug("[rclone.getJobStatus] Request:", { jobid });
   
   const res = await fetch(`${config.rcloneUrl}/job/status`, {
     method: "POST",
@@ -78,7 +79,7 @@ export async function getJobStatus(jobid: number): Promise<RcloneJobStatus> {
   });
   
   const data = await res.json();
-  console.log("[rclone.getJobStatus] Response:", data);
+  logger.debug("[rclone.getJobStatus] Response:", data);
   
   return {
     finished: data.finished ?? false,
@@ -88,7 +89,7 @@ export async function getJobStatus(jobid: number): Promise<RcloneJobStatus> {
 }
 
 export async function getStats(): Promise<RcloneStats> {
-  console.log("[rclone.getStats] Request");
+  logger.debug("[rclone.getStats] Request");
   
   const res = await fetch(`${config.rcloneUrl}/core/stats`, {
     method: "POST",
@@ -96,7 +97,7 @@ export async function getStats(): Promise<RcloneStats> {
   });
   
   const data = await res.json();
-  console.log("[rclone.getStats] Response:", data);
+  logger.debug("[rclone.getStats] Response:", data);
   
   return data;
 }

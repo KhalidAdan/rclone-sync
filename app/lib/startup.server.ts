@@ -4,12 +4,17 @@ import { jobs } from "../db/schema";
 import { watchJob, cleanupStaging } from "./jobWatcher.server";
 import { startArchiveJob } from "./archiver.server";
 import { getJobStatus } from "./rclone.server";
+import { logger } from "./logger.server";
 
 export async function recoverOrphanedJobs() {
   const archiving = await db
     .select()
     .from(jobs)
     .where(eq(jobs.status, "ARCHIVING"));
+
+  if (archiving.length > 0) {
+    logger.warn("[startup.recoverOrphanedJobs] Recovering orphaned ARCHIVING jobs:", { count: archiving.length });
+  }
 
   for (const job of archiving) {
     if (!job.rcloneJobId) continue;

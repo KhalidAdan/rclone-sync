@@ -1,13 +1,18 @@
 import "@/lib/env.server";
 import path from "node:path";
 import fsp from "node:fs/promises";
+import { logger } from "./logger.server";
+
+function resolveDataDir(dir: string): string {
+  return path.resolve(dir);
+}
 
 export const config = {
-  dataDir: process.env.DATA_DIR,
-  dbPath: path.join(process.env.DATA_DIR, process.env.DB_FILENAME),
+  dataDir: resolveDataDir(process.env.DATA_DIR),
+  dbPath: path.join(resolveDataDir(process.env.DATA_DIR), process.env.DB_FILENAME),
   stagingDir: path.isAbsolute(process.env.STAGING_DIR)
     ? process.env.STAGING_DIR
-    : path.join(process.env.DATA_DIR, process.env.STAGING_DIR),
+    : path.resolve(process.env.DATA_DIR, process.env.STAGING_DIR),
 
   rcloneUrl: process.env.RCLONE_URL,
   rcloneRemote: process.env.RCLONE_REMOTE,
@@ -18,6 +23,16 @@ export const config = {
 
 export async function validateConfig() {
   await fsp.mkdir(config.stagingDir, { recursive: true });
+
+  logger.info("[config.validateConfig] Resolved config:", {
+    dataDir: config.dataDir,
+    dbPath: config.dbPath,
+    stagingDir: config.stagingDir,
+    rcloneUrl: config.rcloneUrl,
+    rcloneRemote: config.rcloneRemote,
+    logLevel: config.logLevel,
+    port: config.port,
+  });
 
   try {
     const res = await fetch(`${config.rcloneUrl}/core/version`, {

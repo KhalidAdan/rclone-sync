@@ -5,45 +5,46 @@ import { jobs } from "../db/schema";
 import { startArchiveJob } from "./archiver.server";
 import { listFiles, getJobStatus } from "./rclone.server";
 import { config } from "./config.server";
+import { logger } from "./logger.server";
 import * as fs from "node:fs/promises";
 
 export function watchJob(id: string, rcloneJobId: number) {
-  console.log(`[jobWatcher.watchJob] Starting watch for job ${id}, rclone jobid ${rcloneJobId}`);
+  logger.info("[jobWatcher.watchJob] Starting watch for job", { jobId: id, rcloneJobId });
   
   const interval = setInterval(async () => {
     try {
-      console.log(`[jobWatcher.watchJob] Checking status for job ${id}`);
+      logger.debug(`[jobWatcher.watchJob] Checking status for job ${id}`);
       const status = await getJobStatus(rcloneJobId);
-      console.log(`[jobWatcher.watchJob] Status for job ${id}:`, status);
+      logger.debug(`[jobWatcher.watchJob] Status for job ${id}:`, status);
 
       if (!status.finished) {
-        console.log(`[jobWatcher.watchJob] Job ${id} not finished yet`);
+        logger.debug(`[jobWatcher.watchJob] Job ${id} not finished yet`);
         return;
       }
       
       clearInterval(interval);
-      console.log(`[jobWatcher.watchJob] Job ${id} finished, success:`, status.success);
+      logger.info(`[jobWatcher.watchJob] Job ${id} finished, success:`, { success: status.success });
 
       if (status.success) {
-        console.log(`[jobWatcher.watchJob] Job ${id} succeeded, transitioning to VERIFYING`);
+        logger.info(`[jobWatcher.watchJob] Job ${id} succeeded, transitioning to VERIFYING`);
         await db
           .update(jobs)
           .set({ status: "VERIFYING", updatedAt: new Date().toISOString() })
           .where(eq(jobs.id, id));
 
-        console.log(`[jobWatcher.watchJob] Verifying archive for job ${id}`);
+        logger.info(`[jobWatcher.watchJob] Verifying archive for job ${id}`);
         const verified = await verifyArchive(id);
-        console.log(`[jobWatcher.watchJob] Verification result for job ${id}:`, verified);
+        logger.debug(`[jobWatcher.watchJob] Verification result for job ${id}:`, { verified });
 
         if (verified) {
-          console.log(`[jobWatcher.watchJob] Job ${id} verified, transitioning to COMPLETED`);
+          logger.info(`[jobWatcher.watchJob] Job ${id} verified, transitioning to COMPLETED`);
           await db
             .update(jobs)
             .set({ status: "COMPLETED", updatedAt: new Date().toISOString() })
             .where(eq(jobs.id, id));
           await cleanupStaging(id);
         } else {
-          console.error(`[jobWatcher.watchJob] Job ${id} verification failed`);
+          logger.error(`[jobWatcher.watchJob] Job ${id} verification failed`);
           await db
             .update(jobs)
             .set({
@@ -57,7 +58,7 @@ export function watchJob(id: string, rcloneJobId: number) {
             .where(eq(jobs.id, id));
         }
       } else {
-        console.error(`[jobWatcher.watchJob] Job ${id} failed:`, status.error);
+        logger.error(`[jobWatcher.watchJob] Job ${id} failed:`, { error: status.error });
         await db
           .update(jobs)
           .set({
@@ -73,7 +74,7 @@ export function watchJob(id: string, rcloneJobId: number) {
 
       await startNextQueued();
     } catch (err) {
-      console.error(`[jobWatcher.watchJob] Error watching job ${id}:`, err);
+      logger.error(`[jobWatcher.watchJob] Error watching job ${id}:`, { error: String(err) });
       clearInterval(interval);
       await db
         .update(jobs)
@@ -89,7 +90,7 @@ export function watchJob(id: string, rcloneJobId: number) {
 }
 
 export async function startNextQueued() {
-  console.log("[jobWatcher.startNextQueued] Checking for queued jobs");
+  logger.debug("[jobWatcher.startNextQueued] Checking for queued jobs");
   
   const [next] = await db
     .select()
@@ -99,54 +100,52 @@ export async function startNextQueued() {
     .limit(1);
 
   if (next) {
-    console.log("[jobWatcher.startNextQueued] Found queued job:", next.id, next.filename);
+    logger.info("[jobWatcher.startNextQueued] Found queued job:", { jobId: next.id, filename: next.filename });
     await startArchiveJob(next.id);
   } else {
-    console.log("[jobWatcher.startNextQueued] No queued jobs found");
+    logger.debug("[jobWatcher.startNextQueued] No queued jobs found");
   }
 }
 
 export async function verifyArchive(id: string): Promise<boolean> {
-  console.log("[jobWatcher.verifyArchive] Verifying job:", id);
+  logger.info("[jobWatcher.verifyArchive] Verifying job:", { jobId: id });
   
   const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
   if (!job) {
-    console.error("[jobWatcher.verifyArchive] Job not found:", id);
+    logger.error("[jobWatcher.verifyArchive] Job not found:", { jobId: id });
     return false;
   }
 
-  console.log("[jobWatcher.verifyArchive] Job details:", {
+  logger.debug("[jobWatcher.verifyArchive] Job details:", {
     id: job.id,
     filename: job.filename,
     destinationPath: job.destinationPath,
   });
 
-  // Handle empty destination path - use rcloneRemote without trailing colon
-  // B2 app keys fail with trailing colon due to bucket restriction
   const fsPath = job.destinationPath 
     ? `${config.rcloneRemote}${job.destinationPath}`
     : config.rcloneRemote;
   
-  console.log("[jobWatcher.verifyArchive] Calling listFiles with:", { fs: fsPath, remote: "" });
+  logger.debug("[jobWatcher.verifyArchive] Calling listFiles with:", { fs: fsPath, remote: "" });
   
   const { list } = await listFiles(fsPath, "");
-  console.log("[jobWatcher.verifyArchive] List result:", list);
+  logger.debug("[jobWatcher.verifyArchive] List result:", { list });
 
   const found = list.some((entry) => entry.Name === job.filename);
-  console.log("[jobWatcher.verifyArchive] File found:", found);
+  logger.debug("[jobWatcher.verifyArchive] File found:", { found });
   
   return found;
 }
 
 export async function cleanupStaging(id: string) {
-  console.log("[jobWatcher.cleanupStaging] Cleaning up:", id);
+  logger.info("[jobWatcher.cleanupStaging] Cleaning up:", { jobId: id });
   const stagingPath = path.join(config.stagingDir, id);
-  console.log("[jobWatcher.cleanupStaging] Path:", stagingPath);
+  logger.debug("[jobWatcher.cleanupStaging] Path:", { stagingPath });
   
   try {
     await fs.rm(stagingPath, { recursive: true, force: true });
-    console.log("[jobWatcher.cleanupStaging] Cleanup complete");
+    logger.info("[jobWatcher.cleanupStaging] Cleanup complete", { jobId: id });
   } catch (err) {
-    console.error("[jobWatcher.cleanupStaging] Cleanup error:", err);
+    logger.error("[jobWatcher.cleanupStaging] Cleanup error:", { error: String(err) });
   }
 }

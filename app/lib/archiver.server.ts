@@ -4,9 +4,10 @@ import { db } from "../db/client.server";
 import { jobs } from "../db/schema";
 import { watchJob } from "./jobWatcher.server";
 import { config } from "./config.server";
+import { logger } from "./logger.server";
 
 export async function startOrQueueArchive(id: string) {
-  console.log("[archiver.startOrQueueArchive] Job ID:", id);
+  logger.info("[archiver.startOrQueueArchive] Job ID:", { jobId: id });
   
   const active = await db
     .select()
@@ -14,10 +15,10 @@ export async function startOrQueueArchive(id: string) {
     .where(eq(jobs.status, "ARCHIVING"))
     .limit(1);
 
-  console.log("[archiver.startOrQueueArchive] Active jobs:", active.length);
+  logger.debug("[archiver.startOrQueueArchive] Active jobs:", { count: active.length });
 
   if (active.length > 0) {
-    console.log("[archiver.startOrQueueArchive] Job queued, another is archiving");
+    logger.info("[archiver.startOrQueueArchive] Job queued, another is archiving");
     await db
       .update(jobs)
       .set({ status: "QUEUED", updatedAt: new Date().toISOString() })
@@ -29,15 +30,15 @@ export async function startOrQueueArchive(id: string) {
 }
 
 export async function startArchiveJob(id: string) {
-  console.log("[archiver.startArchiveJob] Starting archive for job:", id);
+  logger.info("[archiver.startArchiveJob] Starting archive for job:", { jobId: id });
   
   const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
   if (!job) {
-    console.error("[archiver.startArchiveJob] Job not found:", id);
+    logger.error("[archiver.startArchiveJob] Job not found:", { jobId: id });
     return;
   }
 
-  console.log("[archiver.startArchiveJob] Job details:", {
+  logger.debug("[archiver.startArchiveJob] Job details:", {
     id: job.id,
     filename: job.filename,
     sizeBytes: job.sizeBytes,
@@ -49,7 +50,7 @@ export async function startArchiveJob(id: string) {
   const dstFs = config.rcloneRemote;
   const dstRemote = `${job.destinationPath}${job.filename}`;
 
-  console.log("[archiver.startArchiveJob] rclone copyfile params:", {
+  logger.debug("[archiver.startArchiveJob] rclone copyfile params:", {
     srcFs,
     srcRemote,
     dstFs,
@@ -60,7 +61,7 @@ export async function startArchiveJob(id: string) {
   
   try {
     const { jobid } = await copyFile(srcFs, srcRemote, dstFs, dstRemote);
-    console.log("[archiver.startArchiveJob] rclone job started, jobid:", jobid);
+    logger.info("[archiver.startArchiveJob] rclone job started, jobid:", { jobid, rcloneJobId: jobid });
 
     await db
       .update(jobs)
@@ -73,7 +74,7 @@ export async function startArchiveJob(id: string) {
 
     watchJob(id, jobid);
   } catch (err) {
-    console.error("[archiver.startArchiveJob] Error starting archive:", err);
+    logger.error("[archiver.startArchiveJob] Error starting archive:", { error: String(err) });
     throw err;
   }
 }
