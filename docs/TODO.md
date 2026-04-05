@@ -5,3 +5,4 @@
 - [ ] upload progress is just the size of one file uploaded. Not the batch.
 - [ ] continue on from task 22
 - [ ] get the last 20 jobs in jobs page, can eventually add pagination.
+- [ ] sort the jobs table by newest jobs AND state

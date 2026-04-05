@@ -1,9 +1,9 @@
 import { desc, eq, sql } from "drizzle-orm";
 import { useEffect } from "react";
-import { Form, useRevalidator, Link } from "react-router";
+import { Form, useRevalidator } from "react-router";
 import { JobHistory } from "../components/JobHistory";
 import { db } from "../db/client.server";
-import { jobs } from "../db/schema";
+import { jobs, jobEvents } from "../db/schema";
 import { config } from "../lib/config.server";
 import { startOrQueueArchive } from "../lib/archiver.server";
 import { getStats } from "../lib/rclone.server";
@@ -46,20 +46,38 @@ export async function loader({ request }: { request: Request }) {
   const totalCount = countResult?.count ?? 0;
   const totalPages = Math.ceil(totalCount / limit);
 
-  const pageJobs = await db.query.jobs.findMany({
-    with: { events: true },
-    orderBy: [desc(jobs.updatedAt)],
-    limit,
-    offset,
-  });
+  // Fetch jobs with explicit select (no relational query)
+  const pageJobs = await db
+    .select()
+    .from(jobs)
+    .orderBy(desc(jobs.updatedAt))
+    .limit(limit)
+    .offset(offset);
+
+  // Fetch events separately for these jobs
+  const jobIds = pageJobs.map(j => j.id);
+  let jobEventsForPage: typeof jobEvents.$inferSelect[] = [];
+  
+  if (jobIds.length > 0) {
+    jobEventsForPage = await db
+      .select()
+      .from(jobEvents)
+      .where(sql`${jobEvents.jobId} IN (${jobIds.join(',')})`);
+  }
+
+  // Merge events into jobs
+  const jobsWithEvents = pageJobs.map(job => ({
+    ...job,
+    events: jobEventsForPage.filter(e => e.jobId === job.id),
+  }));
 
   // Check for STAGED jobs and trigger first one to archive
-  const stagedJobs = pageJobs.filter((j) => j.status === "STAGED");
+  const stagedJobs = jobsWithEvents.filter((j) => j.status === "STAGED");
   if (stagedJobs.length > 0) {
     await startOrQueueArchive(stagedJobs[0].id);
   }
 
-  const archiving = pageJobs.find((j) => j.status === "ARCHIVING");
+  const archiving = jobsWithEvents.find((j) => j.status === "ARCHIVING");
   let liveProgress = null;
 
   if (archiving) {
@@ -82,7 +100,7 @@ export async function loader({ request }: { request: Request }) {
   }
 
   return {
-    jobs: pageJobs,
+    jobs: jobsWithEvents,
     liveProgress,
     refreshInterval: config.uiRefreshIntervalSec,
     page,
@@ -278,8 +296,8 @@ export default function Jobs({ loaderData }: { loaderData: Awaited<ReturnType<ty
             Showing {((page - 1) * 20) + 1}–{Math.min(page * 20, totalCount)} of {totalCount} jobs
           </p>
           <div className="flex gap-2">
-            <Link
-              to={`/jobs?page=${page - 1}`}
+            <a
+              href={`/jobs?page=${page - 1}`}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg border ${
                 hasPrev
                   ? "border-gray-300 text-gray-700 hover:bg-gray-50"
@@ -287,12 +305,12 @@ export default function Jobs({ loaderData }: { loaderData: Awaited<ReturnType<ty
               }`}
             >
               ← Previous
-            </Link>
+            </a>
             <span className="px-3 py-1.5 text-xs text-gray-400">
               Page {page} of {totalPages}
             </span>
-            <Link
-              to={`/jobs?page=${page + 1}`}
+            <a
+              href={`/jobs?page=${page + 1}`}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg border ${
                 hasNext
                   ? "border-gray-300 text-gray-700 hover:bg-gray-50"
@@ -300,7 +318,7 @@ export default function Jobs({ loaderData }: { loaderData: Awaited<ReturnType<ty
               }`}
             >
               Next →
-            </Link>
+            </a>
           </div>
         </div>
       )}
