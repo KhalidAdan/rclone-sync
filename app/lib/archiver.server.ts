@@ -6,7 +6,7 @@ import { watchJob } from "./jobWatcher.server";
 import { config } from "./config.server";
 import { logger } from "./logger.server";
 
-async function logJobEvent(jobId: string, eventType: string, message: string) {
+async function logJobEvent(jobId: string, eventType: "created" | "queued" | "archiving" | "verifying" | "completed" | "failed" | "abandoned", message: string) {
   const now = new Date().toISOString();
   await db.insert(jobEvents).values({
     jobId,

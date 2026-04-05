@@ -30,7 +30,17 @@ export const jobs = sqliteTable("jobs", {
 export const jobEvents = sqliteTable("job_events", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   jobId: text("job_id").notNull(),
-  eventType: text("event_type").notNull(),
+  eventType: text("event_type", {
+    enum: [
+      "created",
+      "queued",
+      "archiving",
+      "verifying",
+      "completed",
+      "failed",
+      "abandoned",
+    ],
+  }).notNull(),
   message: text("message").notNull(),
   timestamp: text("timestamp").notNull(),
 });
