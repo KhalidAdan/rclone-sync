@@ -1,4 +1,5 @@
-const RCLONE_URL = "http://localhost:5572";
+import "@/lib/env.server";
+import { config } from "./config.server";
 
 export interface RcloneJobStatus {
   finished: boolean;
@@ -27,7 +28,7 @@ export async function copyFile(
 ): Promise<{ jobid: number }> {
   console.log("[rclone.copyFile] Request:", { srcFs, srcRemote, dstFs, dstRemote });
   
-  const res = await fetch(`${RCLONE_URL}/operations/copyfile`, {
+  const res = await fetch(`${config.rcloneUrl}/operations/copyfile`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -55,7 +56,7 @@ export async function listFiles(
 ): Promise<{ list: RcloneListEntry[] }> {
   console.log("[rclone.listFiles] Request:", { fs, remote });
   
-  const res = await fetch(`${RCLONE_URL}/operations/list`, {
+  const res = await fetch(`${config.rcloneUrl}/operations/list`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ fs, remote }),
@@ -70,7 +71,7 @@ export async function listFiles(
 export async function getJobStatus(jobid: number): Promise<RcloneJobStatus> {
   console.log("[rclone.getJobStatus] Request:", { jobid });
   
-  const res = await fetch(`${RCLONE_URL}/job/status`, {
+  const res = await fetch(`${config.rcloneUrl}/job/status`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ jobid }),
@@ -89,7 +90,7 @@ export async function getJobStatus(jobid: number): Promise<RcloneJobStatus> {
 export async function getStats(): Promise<RcloneStats> {
   console.log("[rclone.getStats] Request");
   
-  const res = await fetch(`${RCLONE_URL}/core/stats`, {
+  const res = await fetch(`${config.rcloneUrl}/core/stats`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
   });

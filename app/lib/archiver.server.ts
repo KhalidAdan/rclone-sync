@@ -3,14 +3,7 @@ import * as path from "path";
 import { db } from "../db/client.server";
 import { jobs } from "../db/schema";
 import { watchJob } from "./jobWatcher.server";
-import { rcloneConfig } from "./config";
-
-const STAGING_DIR = process.env.NODE_ENV === "production" 
-  ? "/data/staging" 
-  : path.resolve("./data/staging");
-
-console.log("[archiver] STAGING_DIR:", STAGING_DIR);
-console.log("[archiver] RCLONE_FS:", rcloneConfig.fsPath);
+import { config } from "./config.server";
 
 export async function startOrQueueArchive(id: string) {
   console.log("[archiver.startOrQueueArchive] Job ID:", id);
@@ -51,9 +44,9 @@ export async function startArchiveJob(id: string) {
     destinationPath: job.destinationPath,
   });
 
-  const srcFs = `${STAGING_DIR}/${id}/`;
+  const srcFs = path.join(config.stagingDir, id) + path.sep;
   const srcRemote = job.filename;
-  const dstFs = rcloneConfig.fsPath;
+  const dstFs = config.rcloneRemote;
   const dstRemote = `${job.destinationPath}${job.filename}`;
 
   console.log("[archiver.startArchiveJob] rclone copyfile params:", {

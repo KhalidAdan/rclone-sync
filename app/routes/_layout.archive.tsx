@@ -1,7 +1,7 @@
 import { useLoaderData } from "react-router";
 import type { Route } from "./+types/_layout.archive";
 import { listFiles } from "../lib/rclone.server";
-import { rcloneConfig } from "../lib/config";
+import { config } from "../lib/config.server";
 
 interface FileEntry {
   Name: string;
@@ -15,11 +15,11 @@ export async function loader({ request }: Route.LoaderArgs) {
   const dir = url.searchParams.get("dir") || "";
 
   try {
-    // Build the fs path: remote:bucket/subdir (NO trailing colon!)
+    // Build the fs path: remote/subdir (NO trailing colon!)
     // B2 app keys fail with trailing colon due to bucket restriction
     const fsPath = dir 
-      ? `${rcloneConfig.fsPathForList}:${dir}`
-      : rcloneConfig.fsPathForList;
+      ? `${config.rcloneRemote}${dir}`
+      : config.rcloneRemote;
     
     console.log("[archive.loader] Calling listFiles with:", { fs: fsPath, remote: "" });
     

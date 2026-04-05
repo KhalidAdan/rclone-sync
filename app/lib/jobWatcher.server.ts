@@ -4,15 +4,8 @@ import { db } from "../db/client.server";
 import { jobs } from "../db/schema";
 import { startArchiveJob } from "./archiver.server";
 import { listFiles, getJobStatus } from "./rclone.server";
-import { rcloneConfig } from "./config";
+import { config } from "./config.server";
 import * as fs from "node:fs/promises";
-
-const STAGING_DIR = process.env.NODE_ENV === "production" 
-  ? "/data/staging" 
-  : path.resolve("./data/staging");
-
-console.log("[jobWatcher] STAGING_DIR:", STAGING_DIR);
-console.log("[jobWatcher] RCLONE_FS:", rcloneConfig.fsPathWithSlash);
 
 export function watchJob(id: string, rcloneJobId: number) {
   console.log(`[jobWatcher.watchJob] Starting watch for job ${id}, rclone jobid ${rcloneJobId}`);
@@ -128,11 +121,11 @@ export async function verifyArchive(id: string): Promise<boolean> {
     destinationPath: job.destinationPath,
   });
 
-  // Handle empty destination path - use fsPathForList without trailing colon
+  // Handle empty destination path - use rcloneRemote without trailing colon
   // B2 app keys fail with trailing colon due to bucket restriction
   const fsPath = job.destinationPath 
-    ? `${rcloneConfig.fsPathForList}:${job.destinationPath}`
-    : rcloneConfig.fsPathForList;
+    ? `${config.rcloneRemote}${job.destinationPath}`
+    : config.rcloneRemote;
   
   console.log("[jobWatcher.verifyArchive] Calling listFiles with:", { fs: fsPath, remote: "" });
   
@@ -147,7 +140,7 @@ export async function verifyArchive(id: string): Promise<boolean> {
 
 export async function cleanupStaging(id: string) {
   console.log("[jobWatcher.cleanupStaging] Cleaning up:", id);
-  const stagingPath = `${STAGING_DIR}/${id}`;
+  const stagingPath = path.join(config.stagingDir, id);
   console.log("[jobWatcher.cleanupStaging] Path:", stagingPath);
   
   try {

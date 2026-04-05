@@ -1,22 +1,19 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as fs from "node:fs/promises";
-import * as path from "path";
+import * as path from "node:path";
 import { jobs } from "./schema";
-
-const DB_PATH = process.env.NODE_ENV === "production" 
-  ? "/data/audiobook-archive.db" 
-  : "./data/audiobook-archive.db";
+import { config } from "../lib/config.server";
 
 async function ensureDirectories() {
-  const dir = path.dirname(DB_PATH);
+  const dir = path.dirname(config.dbPath);
   await fs.mkdir(dir, { recursive: true });
-  await fs.mkdir(path.join(dir, "staging"), { recursive: true });
+  await fs.mkdir(config.stagingDir, { recursive: true });
 }
 
 await ensureDirectories();
 
-const sqlite = new Database(DB_PATH);
+const sqlite = new Database(config.dbPath);
 sqlite.pragma("journal_mode = WAL");
 
 export const db = drizzle(sqlite);

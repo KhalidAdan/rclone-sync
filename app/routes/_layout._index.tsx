@@ -2,18 +2,15 @@ import { Form, useLoaderData, useNavigation } from "react-router";
 import type { Route } from "./+types/_layout._index";
 import { parseFormData } from "@remix-run/form-data-parser";
 import * as fs from "node:fs/promises";
-import * as path from "path";
+import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { db } from "../db/client.server";
 import { jobs } from "../db/schema";
 import { startOrQueueArchive } from "../lib/archiver.server";
+import { config } from "../lib/config.server";
 import { eq, desc } from "drizzle-orm";
 
 const MAX_UPLOAD_SIZE = 1.5 * 1024 * 1024 * 1024; // 1.5GB
-
-const STAGING_DIR = process.env.NODE_ENV === "production" 
-  ? "/data/staging" 
-  : path.resolve("./data/staging");
 
 export async function loader() {
   const stagedJobs = await db
@@ -33,8 +30,8 @@ export async function loader() {
 
 export async function action({ request }: Route.ActionArgs) {
   const id = randomUUID();
-  const stagingDir = `${STAGING_DIR}/${id}`;
-  await fs.mkdir(stagingDir, { recursive: true });
+  const jobStagingDir = path.join(config.stagingDir, id);
+  await fs.mkdir(jobStagingDir, { recursive: true });
 
   const now = new Date().toISOString();
   let filename = "";
@@ -47,7 +44,7 @@ export async function action({ request }: Route.ActionArgs) {
       async (fileUpload) => {
         if (fileUpload.fieldName === "file") {
           filename = fileUpload.name;
-          const dest = `${stagingDir}/${fileUpload.name}`;
+          const dest = path.join(jobStagingDir, fileUpload.name);
           await fs.writeFile(dest, await fileUpload.bytes());
           sizeBytes = (await fs.stat(dest)).size;
           return dest;
