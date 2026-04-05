@@ -1,10 +1,11 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { useEffect } from "react";
 import { Form, useRevalidator } from "react-router";
 import { JobHistory } from "../components/JobHistory";
 import { db } from "../db/client.server";
 import { jobs } from "../db/schema";
 import { config } from "../lib/config.server";
+import { startOrQueueArchive } from "../lib/archiver.server";
 import { getStats } from "../lib/rclone.server";
 import type { Route } from "./+types/_layout.jobs";
 
@@ -39,6 +40,13 @@ export async function loader() {
     with: { events: true },
     orderBy: [desc(jobs.updatedAt)],
   });
+
+  // Check for STAGED jobs and trigger first one to archive
+  const stagedJobs = allJobs.filter((j) => j.status === "STAGED");
+  if (stagedJobs.length > 0) {
+    // Start archiving the first staged job - this will queue the rest
+    await startOrQueueArchive(stagedJobs[0].id);
+  }
 
   const archiving = allJobs.find((j) => j.status === "ARCHIVING");
   let liveProgress = null;

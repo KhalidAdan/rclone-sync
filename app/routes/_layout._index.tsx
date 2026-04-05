@@ -123,8 +123,7 @@ export async function action({ request }: Route.ActionArgs) {
             timestamp
           );
 
-          // Queue for archiving (deferred until after response)
-          setImmediate(() => startOrQueueArchive(id));
+          // File staged successfully - archiving will be triggered by jobs page
           uploadedCount++;
           
           return;
