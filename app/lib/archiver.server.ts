@@ -1,10 +1,20 @@
 import { eq } from "drizzle-orm";
 import * as path from "path";
 import { db } from "../db/client.server";
-import { jobs } from "../db/schema";
+import { jobs, jobEvents } from "../db/schema";
 import { watchJob } from "./jobWatcher.server";
 import { config } from "./config.server";
 import { logger } from "./logger.server";
+
+async function logJobEvent(jobId: string, eventType: string, message: string) {
+  const now = new Date().toISOString();
+  await db.insert(jobEvents).values({
+    jobId,
+    eventType,
+    message,
+    timestamp: now,
+  });
+}
 
 export async function startOrQueueArchive(id: string) {
   logger.info("[archiver.startOrQueueArchive] Job ID:", { jobId: id });
@@ -23,6 +33,7 @@ export async function startOrQueueArchive(id: string) {
       .update(jobs)
       .set({ status: "QUEUED", updatedAt: new Date().toISOString() })
       .where(eq(jobs.id, id));
+    await logJobEvent(id, "queued", "Job queued - waiting for previous archive to complete");
     return;
   }
 
@@ -72,6 +83,7 @@ export async function startArchiveJob(id: string) {
       })
       .where(eq(jobs.id, id));
 
+    await logJobEvent(id, "archiving", `Archive started - copying to ${dstRemote}`);
     watchJob(id, jobid);
   } catch (err) {
     logger.error("[archiver.startArchiveJob] Error starting archive:", { error: String(err) });

@@ -1,11 +1,11 @@
-import { Form, useLoaderData, useNavigation } from "react-router";
+import { Form, useLoaderData, useNavigation, redirect } from "react-router";
 import type { Route } from "./+types/_layout._index";
 import { parseFormData } from "@remix-run/form-data-parser";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { db } from "../db/client.server";
-import { jobs } from "../db/schema";
+import { jobs, jobEvents } from "../db/schema";
 import { startOrQueueArchive } from "../lib/archiver.server";
 import { config } from "../lib/config.server";
 import { eq, desc } from "drizzle-orm";
@@ -64,9 +64,16 @@ export async function action({ request }: Route.ActionArgs) {
       updatedAt: now,
     });
 
+    await db.insert(jobEvents).values({
+      jobId: id,
+      eventType: "created",
+      message: `File uploaded: ${filename} (${(sizeBytes / 1024 / 1024).toFixed(2)} MB)`,
+      timestamp: now,
+    });
+
     await startOrQueueArchive(id);
 
-    return { id, filename, sizeBytes, destinationPath };
+    return redirect("/jobs");
   } catch (err) {
     await db.insert(jobs).values({
       id,
@@ -78,6 +85,14 @@ export async function action({ request }: Route.ActionArgs) {
       createdAt: now,
       updatedAt: now,
     });
+    
+    await db.insert(jobEvents).values({
+      jobId: id,
+      eventType: "failed",
+      message: `Upload failed: ${String(err)}`,
+      timestamp: now,
+    });
+    
     throw err;
   }
 }

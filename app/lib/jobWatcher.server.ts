@@ -1,12 +1,22 @@
 import { eq, asc } from "drizzle-orm";
 import * as path from "path";
 import { db } from "../db/client.server";
-import { jobs } from "../db/schema";
+import { jobs, jobEvents } from "../db/schema";
 import { startArchiveJob } from "./archiver.server";
 import { listFiles, getJobStatus } from "./rclone.server";
 import { config } from "./config.server";
 import { logger } from "./logger.server";
 import * as fs from "node:fs/promises";
+
+async function logJobEvent(jobId: string, eventType: string, message: string) {
+  const now = new Date().toISOString();
+  await db.insert(jobEvents).values({
+    jobId,
+    eventType,
+    message,
+    timestamp: now,
+  });
+}
 
 export function watchJob(id: string, rcloneJobId: number) {
   logger.info("[jobWatcher.watchJob] Starting watch for job", { jobId: id, rcloneJobId });
@@ -31,6 +41,8 @@ export function watchJob(id: string, rcloneJobId: number) {
           .update(jobs)
           .set({ status: "VERIFYING", updatedAt: new Date().toISOString() })
           .where(eq(jobs.id, id));
+        
+        await logJobEvent(id, "verifying", "Archive copy complete, starting verification");
 
         logger.info(`[jobWatcher.watchJob] Verifying archive for job ${id}`);
         const verified = await verifyArchive(id);
@@ -42,6 +54,8 @@ export function watchJob(id: string, rcloneJobId: number) {
             .update(jobs)
             .set({ status: "COMPLETED", updatedAt: new Date().toISOString() })
             .where(eq(jobs.id, id));
+          
+          await logJobEvent(id, "completed", "Archive verified successfully");
           await cleanupStaging(id);
         } else {
           logger.error(`[jobWatcher.watchJob] Job ${id} verification failed`);
@@ -56,6 +70,8 @@ export function watchJob(id: string, rcloneJobId: number) {
               updatedAt: new Date().toISOString(),
             })
             .where(eq(jobs.id, id));
+          
+          await logJobEvent(id, "failed", "Verification failed - file not found in remote");
         }
       } else {
         logger.error(`[jobWatcher.watchJob] Job ${id} failed:`, { error: status.error });
@@ -70,6 +86,8 @@ export function watchJob(id: string, rcloneJobId: number) {
             updatedAt: new Date().toISOString(),
           })
           .where(eq(jobs.id, id));
+        
+        await logJobEvent(id, "failed", `Archive failed: ${status.error || "Unknown error"}`);
       }
 
       await startNextQueued();
@@ -84,6 +102,8 @@ export function watchJob(id: string, rcloneJobId: number) {
           updatedAt: new Date().toISOString(),
         })
         .where(eq(jobs.id, id));
+      
+      await logJobEvent(id, "failed", `Error watching job: ${String(err)}`);
       await startNextQueued();
     }
   }, 5000);

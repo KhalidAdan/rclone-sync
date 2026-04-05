@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { relations } from "drizzle-orm";
 
 export const jobs = sqliteTable("jobs", {
   id: text("id").primaryKey(),
@@ -25,3 +26,22 @@ export const jobs = sqliteTable("jobs", {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
+
+export const jobEvents = sqliteTable("job_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  jobId: text("job_id").notNull(),
+  eventType: text("event_type").notNull(),
+  message: text("message").notNull(),
+  timestamp: text("timestamp").notNull(),
+});
+
+export const jobsRelations = relations(jobs, ({ many }) => ({
+  events: many(jobEvents),
+}));
+
+export const jobEventsRelations = relations(jobEvents, ({ one }) => ({
+  job: one(jobs, {
+    fields: [jobEvents.jobId],
+    references: [jobs.id],
+  }),
+}));

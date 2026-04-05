@@ -19,6 +19,7 @@ export const config = {
 
   logLevel: process.env.LOG_LEVEL,
   port: process.env.PORT,
+  uiRefreshIntervalSec: parseInt(process.env.UI_REFRESH_INTERVAL_SEC || "3", 10),
 } as const;
 
 export async function validateConfig() {
