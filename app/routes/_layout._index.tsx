@@ -1,264 +1,247 @@
-import { parseFormData } from "@remix-run/form-data-parser";
-import { desc, eq } from "drizzle-orm";
-import { randomUUID } from "node:crypto";
-import * as fsSync from "node:fs";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import { Form, redirect, useNavigation } from "react-router";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { useRevalidator } from "react-router";
+import { desc } from "drizzle-orm";
 import { db } from "../db/client.server";
-import { jobEvents, jobs } from "../db/schema";
+import { jobs } from "../db/schema";
 import { config } from "../lib/config.server";
-import type { Route } from "./+types/_layout._index";
-
-const MAX_UPLOAD_SIZE = 1.5 * 1024 * 1024 * 1024; // 1.5GB
-const PROGRESS_LOG_INTERVAL = 250 * 1024 * 1024; // 250MB
-
-let isProcessingFile = false;
-
-async function logJobEvent(
-  jobId: string,
-  eventType:
-    | "created"
-    | "queued"
-    | "archiving"
-    | "verifying"
-    | "completed"
-    | "failed"
-    | "abandoned",
-  message: string,
-  timestamp: string,
-) {
-  await db.insert(jobEvents).values({
-    jobId,
-    eventType,
-    message,
-    timestamp,
-  });
-}
+import { FileCard, type CardJob } from "../components/FileCard";
+import { DropZone } from "../components/DropZone";
 
 export async function loader() {
-  const stagedJobs = await db
+  const recentJobs = await db
     .select()
     .from(jobs)
-    .where(eq(jobs.status, "STAGED"))
-    .orderBy(desc(jobs.createdAt));
+    .orderBy(desc(jobs.createdAt))
+    .limit(50);
 
-  const queuedJobs = await db
-    .select()
-    .from(jobs)
-    .where(eq(jobs.status, "QUEUED"))
-    .orderBy(desc(jobs.createdAt));
-
-  return { stagedJobs, queuedJobs };
+  return { recentJobs, refreshInterval: config.uiRefreshIntervalSec };
 }
 
-export async function action({ request }: Route.ActionArgs) {
-  const now = new Date().toISOString();
-  const destinationPath = "";
-  let uploadedCount = 0;
-  let failedCount = 0;
+type QueueItem = {
+  localId: string;
+  file: File;
+  status: "pending" | "uploading" | "done" | "error";
+  uploadPercent: number;
+  jobId?: string;
+  error?: string;
+};
 
-  try {
-    await parseFormData(
-      request,
-      { maxFileSize: MAX_UPLOAD_SIZE },
-      async (fileUpload) => {
-        if (fileUpload.fieldName === "file") {
-          // Wait for any currently processing file to finish
-          while (isProcessingFile) {
-            await new Promise((resolve) => setTimeout(resolve, 100));
-          }
+export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<typeof loader>> }) {
+  const { recentJobs, refreshInterval } = loaderData;
+  const revalidator = useRevalidator();
 
-          isProcessingFile = true;
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [destinationPath, setDestinationPath] = useState("");
+  const destinationPathRef = useRef("");
 
-          try {
-            const id = randomUUID();
-            const filename = fileUpload.name;
+  const hasActiveJob = recentJobs.some((j) =>
+    ["UPLOADING", "STAGED", "QUEUED", "ARCHIVING", "VERIFYING"].includes(j.status)
+  );
 
-            // Create job as UPLOADING immediately
-            await db.insert(jobs).values({
-              id,
-              filename,
-              sizeBytes: 0,
-              destinationPath,
-              status: "UPLOADING",
-              createdAt: now,
-              updatedAt: now,
-            });
+  useEffect(() => {
+    if (!hasActiveJob) return;
+    const interval = setInterval(() => revalidator.revalidate(), refreshInterval * 1000);
+    return () => clearInterval(interval);
+  }, [hasActiveJob, refreshInterval, revalidator]);
 
-            // Log upload started
-            await logJobEvent(id, "created", `Upload started: ${filename}`, now);
+  const handleFiles = useCallback((files: File[]) => {
+    const newItems: QueueItem[] = files.map((file) => ({
+      localId: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      file,
+      status: "pending",
+      uploadPercent: 0,
+    }));
+    setQueue((prev) => [...newItems, ...prev]);
+  }, []);
 
-            // Create staging directory
-            const jobStagingDir = path.join(config.stagingDir, id);
-            await fs.mkdir(jobStagingDir, { recursive: true });
+  const uploadNext = useCallback(async (currentQueue: QueueItem[]) => {
+    const pending = currentQueue.find((item) => item.status === "pending");
+    if (!pending) return;
 
-            const dest = path.join(jobStagingDir, filename);
-            const writable = fsSync.createWriteStream(dest);
-            const reader = fileUpload.stream().getReader();
-            let bytesWritten = 0;
+    const xhr = new XMLHttpRequest();
+    const formData = new FormData();
+    formData.append("file", pending.file);
+    formData.append("destinationPath", destinationPathRef.current);
 
-            try {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                await new Promise<void>((resolve, reject) => {
-                  writable.write(value, (err) => (err ? reject(err) : resolve()));
-                });
-
-                bytesWritten += value.length;
-
-                // Log progress every 250MB
-                if (bytesWritten % PROGRESS_LOG_INTERVAL < value.length) {
-                  await logJobEvent(
-                    id,
-                    "created",
-                    `Uploading: ${(bytesWritten / 1024 / 1024).toFixed(1)} MB`,
-                    new Date().toISOString(),
-                  );
-                }
-              }
-            } finally {
-              writable.end();
-            }
-
-            const sizeBytes = (await fs.stat(dest)).size;
-            const timestamp = new Date().toISOString();
-
-            // Update to STAGED with file size
-            await db
-              .update(jobs)
-              .set({
-                status: "STAGED",
-                sizeBytes,
-                updatedAt: timestamp,
-              })
-              .where(eq(jobs.id, id));
-
-            // Log file staged
-            await logJobEvent(
-              id,
-              "created",
-              `File staged: ${filename} (${(sizeBytes / 1024 / 1024).toFixed(2)} MB)`,
-              timestamp,
-            );
-
-            // File staged successfully - archiving will be triggered by jobs page
-            uploadedCount++;
-
-            return;
-          } finally {
-            isProcessingFile = false;
-          }
-        }
-      }
+    const localId = pending.localId;
+    setQueue((prev) =>
+      prev.map((item) => (item.localId === localId ? { ...item, status: "uploading" } : item))
     );
 
-    return redirect("/jobs");
-  } catch (err) {
-    throw err;
-  }
-}
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable) {
+        const percent = Math.round((e.loaded / e.total) * 100);
+        setQueue((prev) =>
+          prev.map((item) => (item.localId === localId ? { ...item, uploadPercent: percent } : item))
+        );
+      }
+    });
 
-export default function Upload({
-  loaderData,
-  actionData,
-}: Route.ComponentProps) {
-  const { stagedJobs, queuedJobs } = loaderData;
-  const navigation = useNavigation();
-  const isUploading = navigation.state === "submitting";
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const { jobId } = JSON.parse(xhr.responseText);
+          setQueue((prev) =>
+            prev.map((item) =>
+              item.localId === localId ? { ...item, status: "done", jobId } : item
+            )
+          );
+        } catch {
+          setQueue((prev) =>
+            prev.map((item) =>
+              item.localId === localId ? { ...item, status: "error", error: "Invalid response" } : item
+            )
+          );
+        }
+      } else {
+        let msg = "Upload failed";
+        try {
+          const { error } = JSON.parse(xhr.responseText);
+          msg = error || msg;
+        } catch {
+          msg = xhr.statusText || msg;
+        }
+        setQueue((prev) =>
+          prev.map((item) => (item.localId === localId ? { ...item, status: "error", error: msg } : item))
+        );
+      }
+    });
+
+    xhr.addEventListener("error", () => {
+      setQueue((prev) =>
+        prev.map((item) =>
+          item.localId === localId ? { ...item, status: "error", error: "Network error" } : item
+        )
+      );
+    });
+
+    xhr.open("POST", "/api/upload");
+    xhr.send(formData);
+  }, []);
+
+  useEffect(() => {
+    if (queue.length === 0) return;
+    const uploading = queue.find((item) => item.status === "uploading");
+    if (uploading) return;
+    const pending = queue.find((item) => item.status === "pending");
+    if (pending) {
+      destinationPathRef.current = destinationPath;
+      uploadNext(queue);
+    }
+  }, [queue, destinationPath, uploadNext]);
+
+  const completedCount = queue.filter((q) => q.status === "done").length;
+  const failedCount = queue.filter((q) => q.status === "error").length;
+  const activeCount = queue.filter((q) => q.status === "pending" || q.status === "uploading").length;
+
+  const serverJobMap = new Map(recentJobs.map((j) => [j.id, j]));
+
+  const mergedJobs: CardJob[] = queue
+    .filter((q) => q.status !== "done")
+    .map((q) => ({
+      localId: q.localId,
+      filename: q.file.name,
+      sizeBytes: q.file.size,
+      stage: q.status === "uploading" ? "UPLOADING" : q.status === "error" ? "UPLOAD_FAILED" : "PENDING",
+      uploadPercent: q.uploadPercent,
+      error: q.error,
+    }));
+
+  queue
+    .filter((q) => q.status === "done" && q.jobId)
+    .forEach((q) => {
+      const serverJob = serverJobMap.get(q.jobId!);
+      mergedJobs.push({
+        localId: q.localId,
+        filename: q.file.name,
+        sizeBytes: q.file.size,
+        stage: serverJob?.status || "STAGED",
+        uploadPercent: 100,
+      });
+    });
+
+  recentJobs.forEach((j) => {
+    const inQueue = queue.some((q) => q.jobId === j.id);
+    if (!inQueue) {
+      mergedJobs.push({
+        localId: j.id,
+        filename: j.filename,
+        sizeBytes: j.sizeBytes,
+        stage: j.status,
+        uploadPercent: 100,
+      });
+    }
+  });
+
+  const isUploading = queue.some((q) => q.status === "uploading");
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6">Upload Audiobook</h1>
-
-      <Form method="post" encType="multipart/form-data" className="space-y-4">
-        <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-gray-400 transition-colors">
-          <input
-            type="file"
-            name="file"
-            id="file"
-            required
-            className="block w-full text-sm text-gray-500
-              file:mr-4 file:py-2 file:px-4
-              file:rounded-full file:border-0
-              file:text-sm file:font-semibold
-              file:bg-blue-50 file:text-blue-700
-              hover:file:bg-blue-100"
-            multiple
-          />
+    <div style={{ minHeight: "100vh", background: "var(--bg)", fontFamily: "var(--font-sans)" }}>
+      <div style={{ maxWidth: 960, margin: "0 auto", padding: "48px 24px" }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 24 }}>
+          <div>
+            <h1 style={{ fontSize: 22, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.02em" }}>
+              Audiobook Archive
+            </h1>
+            <p style={{ fontSize: 13, color: "var(--text-tertiary)", marginTop: 4 }}>
+              Upload → Stage → Archive → Verify
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
+            {activeCount > 0 && (
+              <span style={{ color: "var(--ring-active)" }}>
+                {activeCount} active
+              </span>
+            )}
+            <span style={{ color: "var(--ring-done)" }}>
+              {completedCount} done
+            </span>
+            {failedCount > 0 && (
+              <span style={{ color: "var(--ring-fail)" }}>
+                {failedCount} failed
+              </span>
+            )}
+          </div>
         </div>
 
-        <div>
-          <label
-            htmlFor="destinationPath"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Destination Path (optional)
-          </label>
+        <div style={{ marginBottom: 16 }}>
           <input
             type="text"
-            name="destinationPath"
-            id="destinationPath"
-            placeholder="e.g., Fiction/Fantasy/"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+            placeholder="Destination path (e.g., Fiction/Fantasy/)"
+            value={destinationPath}
+            onChange={(e) => setDestinationPath(e.target.value)}
+            disabled={isUploading}
+            style={{
+              width: "100%",
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1.5px solid var(--border-idle)",
+              fontSize: 14,
+              outline: "none",
+              transition: "border-color 200ms",
+              background: "var(--card-bg)",
+              color: "var(--text-primary)",
+            }}
           />
         </div>
 
-        <button
-          type="submit"
-          disabled={isUploading}
-          className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {isUploading ? "Uploading..." : "Upload"}
-        </button>
-      </Form>
+        <DropZone onFiles={handleFiles} />
 
-      {(stagedJobs.length > 0 || queuedJobs.length > 0) && (
-        <div className="mt-8">
-          <h2 className="text-lg font-semibold mb-4">Pending Files</h2>
-
-          {stagedJobs.length > 0 && (
-            <div className="mb-4">
-              <h3 className="text-sm font-medium text-gray-500 mb-2">Staged</h3>
-              <ul className="space-y-2">
-                {stagedJobs.map((job) => (
-                  <li
-                    key={job.id}
-                    className="bg-white p-3 rounded-md shadow-sm border"
-                  >
-                    <div className="font-medium">{job.filename}</div>
-                    <div className="text-sm text-gray-500">
-                      {(job.sizeBytes / 1024 / 1024).toFixed(2)} MB
-                      {job.destinationPath && ` → ${job.destinationPath}`}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {queuedJobs.length > 0 && (
-            <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-2">Queued</h3>
-              <ul className="space-y-2">
-                {queuedJobs.map((job) => (
-                  <li
-                    key={job.id}
-                    className="bg-white p-3 rounded-md shadow-sm border"
-                  >
-                    <div className="font-medium">{job.filename}</div>
-                    <div className="text-sm text-gray-500">
-                      {(job.sizeBytes / 1024 / 1024).toFixed(2)} MB
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
+        {mergedJobs.length > 0 && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+              gap: 12,
+              marginTop: 24,
+            }}
+          >
+            {mergedJobs.map((job) => (
+              <FileCard key={job.localId} job={job} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
