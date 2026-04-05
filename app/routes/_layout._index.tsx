@@ -22,7 +22,6 @@ type QueueItem = {
   file: File;
   status: "pending" | "uploading" | "done" | "error";
   uploadPercent: number;
-  jobId?: string;
   error?: string;
 };
 
@@ -34,15 +33,15 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
   const [destinationPath, setDestinationPath] = useState("");
   const destinationPathRef = useRef("");
 
-  const hasActiveJob = recentJobs.some((j) =>
+  const hasActiveServerJob = recentJobs.some((j) =>
     ["UPLOADING", "STAGED", "QUEUED", "ARCHIVING", "VERIFYING"].includes(j.status)
   );
 
   useEffect(() => {
-    if (!hasActiveJob) return;
+    if (!hasActiveServerJob) return;
     const interval = setInterval(() => revalidator.revalidate(), refreshInterval * 1000);
     return () => clearInterval(interval);
-  }, [hasActiveJob, refreshInterval, revalidator]);
+  }, [hasActiveServerJob, refreshInterval, revalidator]);
 
   const handleFiles = useCallback((files: File[]) => {
     const newItems: QueueItem[] = files.map((file) => ({
@@ -61,9 +60,6 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
     formData.append("file", pending.file);
-    formData.append("destinationPath", destinationPathRef.current);
-
-    console.log("[Upload] Starting upload:", pending.file.name, "size:", pending.file.size);
 
     const localId = pending.localId;
     setQueue((prev) =>
@@ -80,14 +76,12 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
     });
 
     xhr.addEventListener("load", () => {
-      console.log("[Upload] Response:", xhr.status, xhr.responseText);
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           const { jobId } = JSON.parse(xhr.responseText);
-          console.log("[Upload] Success, jobId:", jobId);
           setQueue((prev) =>
             prev.map((item) =>
-              item.localId === localId ? { ...item, status: "done", jobId } : item
+              item.localId === localId ? { ...item, status: "done", uploadPercent: 100 } : item
             )
           );
         } catch {
@@ -105,7 +99,6 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
         } catch {
           msg = xhr.statusText || msg;
         }
-        console.log("[Upload] Error:", msg);
         setQueue((prev) =>
           prev.map((item) => (item.localId === localId ? { ...item, status: "error", error: msg } : item))
         );
@@ -113,7 +106,6 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
     });
 
     xhr.addEventListener("error", () => {
-      console.log("[Upload] Network error");
       setQueue((prev) =>
         prev.map((item) =>
           item.localId === localId ? { ...item, status: "error", error: "Network error" } : item
@@ -140,44 +132,14 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
   const failedCount = queue.filter((q) => q.status === "error").length;
   const activeCount = queue.filter((q) => q.status === "pending" || q.status === "uploading").length;
 
-  const serverJobMap = new Map(recentJobs.map((j) => [j.id, j]));
-
-  const mergedJobs: CardJob[] = queue
-    .filter((q) => q.status !== "done")
-    .map((q) => ({
-      localId: q.localId,
-      filename: q.file.name,
-      sizeBytes: q.file.size,
-      stage: q.status === "uploading" ? "UPLOADING" : q.status === "error" ? "UPLOAD_FAILED" : "PENDING",
-      uploadPercent: q.uploadPercent,
-      error: q.error,
-    }));
-
-  queue
-    .filter((q) => q.status === "done" && q.jobId)
-    .forEach((q) => {
-      const serverJob = serverJobMap.get(q.jobId!);
-      mergedJobs.push({
-        localId: q.localId,
-        filename: q.file.name,
-        sizeBytes: q.file.size,
-        stage: serverJob?.status || "STAGED",
-        uploadPercent: 100,
-      });
-    });
-
-  recentJobs.forEach((j) => {
-    const inQueue = queue.some((q) => q.jobId === j.id);
-    if (!inQueue) {
-      mergedJobs.push({
-        localId: j.id,
-        filename: j.filename,
-        sizeBytes: j.sizeBytes,
-        stage: j.status,
-        uploadPercent: 100,
-      });
-    }
-  });
+  const cardJobs: CardJob[] = queue.map((q) => ({
+    localId: q.localId,
+    filename: q.file.name,
+    sizeBytes: q.file.size,
+    stage: q.status === "uploading" ? "UPLOADING" : q.status === "done" ? "DONE" : q.status === "error" ? "UPLOAD_FAILED" : "PENDING",
+    uploadPercent: q.uploadPercent,
+    error: q.error,
+  }));
 
   const isUploading = queue.some((q) => q.status === "uploading");
 
@@ -190,13 +152,13 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
               Audiobook Archive
             </h1>
             <p style={{ fontSize: 13, color: "var(--text-tertiary)", marginTop: 4 }}>
-              Upload → Stage → Archive → Verify
+              Drop files below to upload
             </p>
           </div>
           <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
             {activeCount > 0 && (
               <span style={{ color: "var(--ring-active)" }}>
-                {activeCount} active
+                {activeCount} uploading
               </span>
             )}
             <span style={{ color: "var(--ring-done)" }}>
@@ -233,7 +195,7 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
 
         <DropZone onFiles={handleFiles} />
 
-        {mergedJobs.length > 0 && (
+        {cardJobs.length > 0 && (
           <div
             style={{
               display: "grid",
@@ -242,7 +204,7 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
               marginTop: 24,
             }}
           >
-            {mergedJobs.map((job) => (
+            {cardJobs.map((job) => (
               <FileCard key={job.localId} job={job} />
             ))}
           </div>
