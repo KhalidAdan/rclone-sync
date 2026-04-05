@@ -63,6 +63,8 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
     formData.append("file", pending.file);
     formData.append("destinationPath", destinationPathRef.current);
 
+    console.log("[Upload] Starting upload:", pending.file.name, "size:", pending.file.size);
+
     const localId = pending.localId;
     setQueue((prev) =>
       prev.map((item) => (item.localId === localId ? { ...item, status: "uploading" } : item))
@@ -78,9 +80,11 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
     });
 
     xhr.addEventListener("load", () => {
+      console.log("[Upload] Response:", xhr.status, xhr.responseText);
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           const { jobId } = JSON.parse(xhr.responseText);
+          console.log("[Upload] Success, jobId:", jobId);
           setQueue((prev) =>
             prev.map((item) =>
               item.localId === localId ? { ...item, status: "done", jobId } : item
@@ -101,6 +105,7 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
         } catch {
           msg = xhr.statusText || msg;
         }
+        console.log("[Upload] Error:", msg);
         setQueue((prev) =>
           prev.map((item) => (item.localId === localId ? { ...item, status: "error", error: msg } : item))
         );
@@ -108,6 +113,7 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
     });
 
     xhr.addEventListener("error", () => {
+      console.log("[Upload] Network error");
       setQueue((prev) =>
         prev.map((item) =>
           item.localId === localId ? { ...item, status: "error", error: "Network error" } : item
@@ -115,7 +121,7 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
       );
     });
 
-    xhr.open("POST", "/api/upload");
+    xhr.open("POST", "/api/upload?destinationPath=" + encodeURIComponent(destinationPathRef.current));
     xhr.send(formData);
   }, []);
 

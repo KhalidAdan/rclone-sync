@@ -30,8 +30,10 @@ export async function action({ request }: { request: Request }) {
   const now = new Date().toISOString();
   let uploadedFile: { jobId: string; filename: string; sizeBytes: number } | null = null;
 
-  const formData = await request.formData();
-  const destinationPath = (formData.get("destinationPath") as string) || "";
+  const url = new URL(request.url);
+  const destinationPath = url.searchParams.get("destinationPath") || "";
+
+  console.log("[api/upload] destinationPath:", destinationPath);
 
   try {
     await parseFormData(
