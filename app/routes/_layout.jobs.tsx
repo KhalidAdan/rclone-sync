@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq, sql, inArray } from "drizzle-orm";
 import { useEffect } from "react";
 import { Form, useRevalidator } from "react-router";
 import { JobHistory } from "../components/JobHistory";
@@ -62,7 +62,7 @@ export async function loader({ request }: { request: Request }) {
     jobEventsForPage = await db
       .select()
       .from(jobEvents)
-      .where(sql`${jobEvents.jobId} IN (${jobIds.join(',')})`);
+      .where(inArray(jobEvents.jobId, jobIds));
   }
 
   // Merge events into jobs
