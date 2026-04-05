@@ -3,6 +3,7 @@
 ## Problem
 
 Hardcoded values scattered across codebase:
+
 - `./data/staging`, `./data/audiobook-archive.db`
 - `http://localhost:5572`, `audiobooks:`
 - No validation at startup
@@ -14,16 +15,20 @@ Single `env.server.ts` with Zod validation + ProcessEnv augmentation. Use `proce
 ## Steps
 
 1. Install zod:
+
    ```bash
    npm install zod
    ```
 
 2. Create `app/lib/env.server.ts`:
+
    ```ts
    import { ZodError, z } from "zod";
 
    const envSchema = z.object({
-     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+     NODE_ENV: z
+       .enum(["development", "production", "test"])
+       .default("development"),
      DATA_DIR: z.string().min(1),
      RCLONE_URL: z.string().url().default("http://localhost:5572"),
      RCLONE_REMOTE: z.string().default("audiobooks:"),
@@ -38,7 +43,10 @@ Single `env.server.ts` with Zod validation + ProcessEnv augmentation. Use `proce
      if (e instanceof ZodError) {
        console.error("Missing or invalid environment variables:", e.errors);
      } else {
-       console.error("An unknown error occurred while parsing env variables:", e);
+       console.error(
+         "An unknown error occurred while parsing env variables:",
+         e,
+       );
      }
      throw e;
    }
@@ -51,27 +59,33 @@ Single `env.server.ts` with Zod validation + ProcessEnv augmentation. Use `proce
    ```
 
 3. Add side-effect import early in server entry (e.g., `app/entry.server.tsx`):
+
    ```ts
    import "@/lib/env.server";
    ```
 
 4. Usage in codebase (fully typed):
+
    ```ts
    import path from "node:path";
 
-   const stagingDir = path.join(process.env.DATA_DIR!, "staging");
-   const dbPath = path.join(process.env.DATA_DIR!, process.env.DB_FILENAME!);
+   const stagingDir = path.join(process.env.DATA_DIR, "staging");
+   const dbPath = path.join(process.env.DATA_DIR, process.env.DB_FILENAME);
    ```
 
 ## Files to Create
+
 - `app/lib/env.server.ts`
 
 ## Files to Modify
+
 - `app/entry.server.tsx` (or wherever server boots)
 - Any file using hardcoded paths/URLs
 
 ## Dependencies
+
 - zod
 
 ## References
+
 - PRD Section 1: Configuration Management
