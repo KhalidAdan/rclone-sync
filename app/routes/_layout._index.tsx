@@ -1,14 +1,14 @@
-import { Form, useLoaderData, useNavigation, redirect } from "react-router";
-import type { Route } from "./+types/_layout._index";
 import { parseFormData } from "@remix-run/form-data-parser";
+import { desc, eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+import { Form, redirect, useNavigation } from "react-router";
 import { db } from "../db/client.server";
-import { jobs, jobEvents } from "../db/schema";
+import { jobEvents, jobs } from "../db/schema";
 import { startOrQueueArchive } from "../lib/archiver.server";
 import { config } from "../lib/config.server";
-import { eq, desc } from "drizzle-orm";
+import type { Route } from "./+types/_layout._index";
 
 const MAX_UPLOAD_SIZE = 1.5 * 1024 * 1024 * 1024; // 1.5GB
 
@@ -49,7 +49,7 @@ export async function action({ request }: Route.ActionArgs) {
           sizeBytes = (await fs.stat(dest)).size;
           return dest;
         }
-      }
+      },
     );
 
     const destinationPath = (formData.get("destinationPath") as string) || "";
@@ -85,19 +85,22 @@ export async function action({ request }: Route.ActionArgs) {
       createdAt: now,
       updatedAt: now,
     });
-    
+
     await db.insert(jobEvents).values({
       jobId: id,
       eventType: "failed",
       message: `Upload failed: ${String(err)}`,
       timestamp: now,
     });
-    
+
     throw err;
   }
 }
 
-export default function Upload({ loaderData, actionData }: Route.ComponentProps) {
+export default function Upload({
+  loaderData,
+  actionData,
+}: Route.ComponentProps) {
   const { stagedJobs, queuedJobs } = loaderData;
   const navigation = useNavigation();
   const isUploading = navigation.state === "submitting";
@@ -106,11 +109,7 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
     <div className="max-w-2xl mx-auto">
       <h1 className="text-2xl font-bold mb-6">Upload Audiobook</h1>
 
-      <Form
-        method="post"
-        encType="multipart/form-data"
-        className="space-y-4"
-      >
+      <Form method="post" encType="multipart/form-data" className="space-y-4">
         <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-gray-400 transition-colors">
           <input
             type="file"
@@ -123,11 +122,15 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
               file:text-sm file:font-semibold
               file:bg-blue-50 file:text-blue-700
               hover:file:bg-blue-100"
+            multiple
           />
         </div>
 
         <div>
-          <label htmlFor="destinationPath" className="block text-sm font-medium text-gray-700 mb-1">
+          <label
+            htmlFor="destinationPath"
+            className="block text-sm font-medium text-gray-700 mb-1"
+          >
             Destination Path (optional)
           </label>
           <input
@@ -151,13 +154,16 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
       {(stagedJobs.length > 0 || queuedJobs.length > 0) && (
         <div className="mt-8">
           <h2 className="text-lg font-semibold mb-4">Pending Files</h2>
-          
+
           {stagedJobs.length > 0 && (
             <div className="mb-4">
               <h3 className="text-sm font-medium text-gray-500 mb-2">Staged</h3>
               <ul className="space-y-2">
                 {stagedJobs.map((job) => (
-                  <li key={job.id} className="bg-white p-3 rounded-md shadow-sm border">
+                  <li
+                    key={job.id}
+                    className="bg-white p-3 rounded-md shadow-sm border"
+                  >
                     <div className="font-medium">{job.filename}</div>
                     <div className="text-sm text-gray-500">
                       {(job.sizeBytes / 1024 / 1024).toFixed(2)} MB
@@ -174,7 +180,10 @@ export default function Upload({ loaderData, actionData }: Route.ComponentProps)
               <h3 className="text-sm font-medium text-gray-500 mb-2">Queued</h3>
               <ul className="space-y-2">
                 {queuedJobs.map((job) => (
-                  <li key={job.id} className="bg-white p-3 rounded-md shadow-sm border">
+                  <li
+                    key={job.id}
+                    className="bg-white p-3 rounded-md shadow-sm border"
+                  >
                     <div className="font-medium">{job.filename}</div>
                     <div className="text-sm text-gray-500">
                       {(job.sizeBytes / 1024 / 1024).toFixed(2)} MB
