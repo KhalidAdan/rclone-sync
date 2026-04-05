@@ -37,6 +37,11 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
     ["UPLOADING", "STAGED", "QUEUED", "ARCHIVING", "VERIFYING"].includes(j.status)
   );
 
+  const serverArchiving = recentJobs.filter((j) => ["QUEUED", "ARCHIVING", "VERIFYING"].includes(j.status)).length;
+  const serverStaged = recentJobs.filter((j) => j.status === "STAGED").length;
+  const serverCompleted = recentJobs.filter((j) => j.status === "COMPLETED").length;
+  const hasServerJobs = serverArchiving + serverStaged > 0;
+
   useEffect(() => {
     if (!hasActiveServerJob) return;
     const interval = setInterval(() => revalidator.revalidate(), refreshInterval * 1000);
@@ -171,6 +176,33 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
             )}
           </div>
         </div>
+
+        {hasServerJobs && (
+          <a
+            href="/jobs"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "12px 16px",
+              marginBottom: 16,
+              borderRadius: 12,
+              background: serverArchiving > 0 ? "rgba(139, 92, 246, 0.1)" : "rgba(59, 130, 246, 0.1)",
+              border: `1.5px solid ${serverArchiving > 0 ? "var(--ring-active)" : "#3b82f6"}`,
+              textDecoration: "none",
+              transition: "opacity 200ms",
+            }}
+          >
+            <span style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>
+              {serverArchiving > 0
+                ? `${serverArchiving} job${serverArchiving === 1 ? "" : "s"} currently archiving to B2`
+                : `${serverStaged} file${serverStaged === 1 ? "" : "s"} ready to archive`}
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 500, color: serverArchiving > 0 ? "var(--ring-active)" : "#3b82f6" }}>
+              View Jobs →
+            </span>
+          </a>
+        )}
 
         <div style={{ marginBottom: 16 }}>
           <input
