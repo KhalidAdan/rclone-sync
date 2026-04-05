@@ -2,6 +2,7 @@ import { parseFormData } from "@remix-run/form-data-parser";
 import { desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
 import * as path from "node:path";
 import { Form, redirect, useNavigation } from "react-router";
 import { db } from "../db/client.server";
@@ -29,70 +30,60 @@ export async function loader() {
 }
 
 export async function action({ request }: Route.ActionArgs) {
-  const id = randomUUID();
-  const jobStagingDir = path.join(config.stagingDir, id);
-  await fs.mkdir(jobStagingDir, { recursive: true });
-
   const now = new Date().toISOString();
-  let filename = "";
-  let sizeBytes = 0;
+  const destinationPath = "";
 
   try {
-    const formData = await parseFormData(
+    await parseFormData(
       request,
       { maxFileSize: MAX_UPLOAD_SIZE },
       async (fileUpload) => {
         if (fileUpload.fieldName === "file") {
-          filename = fileUpload.name;
-          const dest = path.join(jobStagingDir, fileUpload.name);
-          await fs.writeFile(dest, await fileUpload.bytes());
-          sizeBytes = (await fs.stat(dest)).size;
-          return dest;
+          const id = randomUUID();
+          const jobStagingDir = path.join(config.stagingDir, id);
+          await fs.mkdir(jobStagingDir, { recursive: true });
+
+          const filename = fileUpload.name;
+          const dest = path.join(jobStagingDir, filename);
+          const writable = fsSync.createWriteStream(dest);
+          const reader = fileUpload.stream().getReader();
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              await new Promise<void>((resolve, reject) => {
+                writable.write(value, (err) => err ? reject(err) : resolve());
+              });
+            }
+          } finally {
+            writable.end();
+          }
+          const sizeBytes = (await fs.stat(dest)).size;
+
+          await db.insert(jobs).values({
+            id,
+            filename,
+            sizeBytes,
+            destinationPath,
+            status: "STAGED",
+            createdAt: now,
+            updatedAt: now,
+          });
+
+          await db.insert(jobEvents).values({
+            jobId: id,
+            eventType: "created",
+            message: `File uploaded: ${filename} (${(sizeBytes / 1024 / 1024).toFixed(2)} MB)`,
+            timestamp: now,
+          });
+
+          await startOrQueueArchive(id);
         }
       },
     );
 
-    const destinationPath = (formData.get("destinationPath") as string) || "";
-
-    await db.insert(jobs).values({
-      id,
-      filename,
-      sizeBytes,
-      destinationPath,
-      status: "STAGED",
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await db.insert(jobEvents).values({
-      jobId: id,
-      eventType: "created",
-      message: `File uploaded: ${filename} (${(sizeBytes / 1024 / 1024).toFixed(2)} MB)`,
-      timestamp: now,
-    });
-
-    await startOrQueueArchive(id);
-
     return redirect("/jobs");
   } catch (err) {
-    await db.insert(jobs).values({
-      id,
-      filename: filename || "unknown",
-      sizeBytes,
-      destinationPath: "",
-      status: "UPLOAD_FAILED",
-      error: JSON.stringify({ phase: "UPLOADING", message: String(err) }),
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await db.insert(jobEvents).values({
-      jobId: id,
-      eventType: "failed",
-      message: `Upload failed: ${String(err)}`,
-      timestamp: now,
-    });
-
     throw err;
   }
 }
