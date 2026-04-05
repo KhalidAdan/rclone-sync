@@ -1,20 +1,33 @@
 import { parseFormData } from "@remix-run/form-data-parser";
 import { desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import * as fs from "node:fs/promises";
 import * as fsSync from "node:fs";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Form, redirect, useNavigation } from "react-router";
 import { db } from "../db/client.server";
 import { jobEvents, jobs } from "../db/schema";
-import { startOrQueueArchive } from "../lib/archiver.server";
 import { config } from "../lib/config.server";
 import type { Route } from "./+types/_layout._index";
 
 const MAX_UPLOAD_SIZE = 1.5 * 1024 * 1024 * 1024; // 1.5GB
-const PROGRESS_LOG_INTERVAL = 10 * 1024 * 1024; // 10MB
+const PROGRESS_LOG_INTERVAL = 250 * 1024 * 1024; // 250MB
 
-async function logJobEvent(jobId: string, eventType: "created" | "queued" | "archiving" | "verifying" | "completed" | "failed" | "abandoned", message: string, timestamp: string) {
+let isProcessingFile = false;
+
+async function logJobEvent(
+  jobId: string,
+  eventType:
+    | "created"
+    | "queued"
+    | "archiving"
+    | "verifying"
+    | "completed"
+    | "failed"
+    | "abandoned",
+  message: string,
+  timestamp: string,
+) {
   await db.insert(jobEvents).values({
     jobId,
     eventType,
@@ -51,84 +64,95 @@ export async function action({ request }: Route.ActionArgs) {
       { maxFileSize: MAX_UPLOAD_SIZE },
       async (fileUpload) => {
         if (fileUpload.fieldName === "file") {
-          const id = randomUUID();
-          const filename = fileUpload.name;
-
-          // Create job as UPLOADING immediately
-          await db.insert(jobs).values({
-            id,
-            filename,
-            sizeBytes: 0,
-            destinationPath,
-            status: "UPLOADING",
-            createdAt: now,
-            updatedAt: now,
-          });
-
-          // Log upload started
-          await logJobEvent(id, "created", `Upload started: ${filename}`, now);
-
-          // Create staging directory
-          const jobStagingDir = path.join(config.stagingDir, id);
-          await fs.mkdir(jobStagingDir, { recursive: true });
-
-          const dest = path.join(jobStagingDir, filename);
-          const writable = fsSync.createWriteStream(dest);
-          const reader = fileUpload.stream().getReader();
-          let bytesWritten = 0;
-
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              
-              await new Promise<void>((resolve, reject) => {
-                writable.write(value, (err) => err ? reject(err) : resolve());
-              });
-              
-              bytesWritten += value.length;
-              
-              // Log progress every 10MB
-              if (bytesWritten % PROGRESS_LOG_INTERVAL < value.length) {
-                await logJobEvent(
-                  id, 
-                  "created", 
-                  `Uploading: ${(bytesWritten / 1024 / 1024).toFixed(1)} MB`, 
-                  new Date().toISOString()
-                );
-              }
-            }
-          } finally {
-            writable.end();
+          // Wait for any currently processing file to finish
+          while (isProcessingFile) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
           }
 
-          const sizeBytes = (await fs.stat(dest)).size;
-          const timestamp = new Date().toISOString();
+          isProcessingFile = true;
 
-          // Update to STAGED with file size
-          await db
-            .update(jobs)
-            .set({
-              status: "STAGED",
-              sizeBytes,
-              updatedAt: timestamp,
-            })
-            .where(eq(jobs.id, id));
+          try {
+            const id = randomUUID();
+            const filename = fileUpload.name;
 
-          // Log file staged
-          await logJobEvent(
-            id,
-            "created",
-            `File staged: ${filename} (${(sizeBytes / 1024 / 1024).toFixed(2)} MB)`,
-            timestamp
-          );
+            // Create job as UPLOADING immediately
+            await db.insert(jobs).values({
+              id,
+              filename,
+              sizeBytes: 0,
+              destinationPath,
+              status: "UPLOADING",
+              createdAt: now,
+              updatedAt: now,
+            });
 
-          // File staged successfully - archiving will be triggered by jobs page
-          uploadedCount++;
-          
-          return;
+            // Log upload started
+            await logJobEvent(id, "created", `Upload started: ${filename}`, now);
+
+            // Create staging directory
+            const jobStagingDir = path.join(config.stagingDir, id);
+            await fs.mkdir(jobStagingDir, { recursive: true });
+
+            const dest = path.join(jobStagingDir, filename);
+            const writable = fsSync.createWriteStream(dest);
+            const reader = fileUpload.stream().getReader();
+            let bytesWritten = 0;
+
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                await new Promise<void>((resolve, reject) => {
+                  writable.write(value, (err) => (err ? reject(err) : resolve()));
+                });
+
+                bytesWritten += value.length;
+
+                // Log progress every 250MB
+                if (bytesWritten % PROGRESS_LOG_INTERVAL < value.length) {
+                  await logJobEvent(
+                    id,
+                    "created",
+                    `Uploading: ${(bytesWritten / 1024 / 1024).toFixed(1)} MB`,
+                    new Date().toISOString(),
+                  );
+                }
+              }
+            } finally {
+              writable.end();
+            }
+
+            const sizeBytes = (await fs.stat(dest)).size;
+            const timestamp = new Date().toISOString();
+
+            // Update to STAGED with file size
+            await db
+              .update(jobs)
+              .set({
+                status: "STAGED",
+                sizeBytes,
+                updatedAt: timestamp,
+              })
+              .where(eq(jobs.id, id));
+
+            // Log file staged
+            await logJobEvent(
+              id,
+              "created",
+              `File staged: ${filename} (${(sizeBytes / 1024 / 1024).toFixed(2)} MB)`,
+              timestamp,
+            );
+
+            // File staged successfully - archiving will be triggered by jobs page
+            uploadedCount++;
+
+            return;
+          } finally {
+            isProcessingFile = false;
+          }
         }
-      },
+      }
     );
 
     return redirect("/jobs");
