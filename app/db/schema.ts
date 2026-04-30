@@ -10,11 +10,14 @@ export const jobs = sqliteTable("jobs", {
     enum: [
       "UPLOADING",
       "STAGED",
+      "DECODING",
+      "DECODED",
       "QUEUED",
       "ARCHIVING",
       "VERIFYING",
       "COMPLETED",
       "UPLOAD_FAILED",
+      "DECODE_FAILED",
       "ARCHIVE_FAILED",
       "VERIFY_FAILED",
       "ABANDONED",
@@ -23,6 +26,7 @@ export const jobs = sqliteTable("jobs", {
   rcloneJobId: integer("rclone_job_id"),
   error: text("error"),
   retryCount: integer("retry_count").notNull().default(0),
+  downloadedAt: text("downloaded_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -33,6 +37,8 @@ export const jobEvents = sqliteTable("job_events", {
   eventType: text("event_type", {
     enum: [
       "created",
+      "decoding",
+      "decoded",
       "queued",
       "archiving",
       "verifying",

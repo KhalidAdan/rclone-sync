@@ -12,6 +12,7 @@ const envSchema = z.object({
   DB_FILENAME: z.string().default("audiobook-archive.db"),
   PORT: z.coerce.number().int().positive().default(3001),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  ACTIVATION_BYTES: z.string().min(1),
 });
 
 try {

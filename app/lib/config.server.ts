@@ -17,6 +17,8 @@ export const config = {
   rcloneUrl: process.env.RCLONE_URL,
   rcloneRemote: process.env.RCLONE_REMOTE,
 
+  activationBytes: process.env.ACTIVATION_BYTES,
+
   logLevel: process.env.LOG_LEVEL,
   port: process.env.PORT,
   uiRefreshIntervalSec: parseInt(process.env.UI_REFRESH_INTERVAL_SEC || "3", 10),

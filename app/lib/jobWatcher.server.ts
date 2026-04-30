@@ -8,7 +8,7 @@ import { config } from "./config.server";
 import { logger } from "./logger.server";
 import * as fs from "node:fs/promises";
 
-async function logJobEvent(jobId: string, eventType: "created" | "queued" | "archiving" | "verifying" | "completed" | "failed" | "abandoned", message: string) {
+async function logJobEvent(jobId: string, eventType: "created" | "decoding" | "decoded" | "queued" | "archiving" | "verifying" | "completed" | "failed" | "abandoned", message: string) {
   const now = new Date().toISOString();
   await db.insert(jobEvents).values({
     jobId,
@@ -56,7 +56,14 @@ export function watchJob(id: string, rcloneJobId: number) {
             .where(eq(jobs.id, id));
           
           await logJobEvent(id, "completed", "Archive verified successfully");
-          await cleanupStaging(id);
+          
+          const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
+          
+          if (job?.downloadedAt) {
+            await cleanupFull(id);
+          } else {
+            await cleanupAax(id);
+          }
         } else {
           logger.error(`[jobWatcher.watchJob] Job ${id} verification failed`);
           await db
@@ -167,5 +174,36 @@ export async function cleanupStaging(id: string) {
     logger.info("[jobWatcher.cleanupStaging] Cleanup complete", { jobId: id });
   } catch (err) {
     logger.error("[jobWatcher.cleanupStaging] Cleanup error:", { error: String(err) });
+  }
+}
+
+export async function cleanupAax(jobId: string) {
+  logger.info("[jobWatcher.cleanupAax] Deleting AAX file:", { jobId });
+  
+  const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
+  if (!job) {
+    logger.error("[jobWatcher.cleanupAax] Job not found:", { jobId });
+    return;
+  }
+  
+  const aaxPath = path.join(config.stagingDir, jobId, job.filename);
+  
+  try {
+    await fs.rm(aaxPath, { force: true });
+    logger.info("[jobWatcher.cleanupAax] AAX deleted:", { jobId, aaxPath });
+  } catch (err) {
+    logger.error("[jobWatcher.cleanupAax] Error deleting AAX:", { jobId, error: String(err) });
+  }
+}
+
+export async function cleanupFull(jobId: string) {
+  logger.info("[jobWatcher.cleanupFull] Deleting full staging directory:", { jobId });
+  const stagingPath = path.join(config.stagingDir, jobId);
+  
+  try {
+    await fs.rm(stagingPath, { recursive: true, force: true });
+    logger.info("[jobWatcher.cleanupFull] Cleanup complete", { jobId });
+  } catch (err) {
+    logger.error("[jobWatcher.cleanupFull] Cleanup error:", { error: String(err) });
   }
 }

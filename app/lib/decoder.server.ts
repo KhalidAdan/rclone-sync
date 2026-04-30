@@ -1,0 +1,63 @@
+import { spawn } from "node:child_process";
+import { logger } from "./logger.server";
+
+export async function decodeAax(
+  inputPath: string,
+  outputPath: string,
+  activationBytes: string
+): Promise<void> {
+  logger.info("[decoder.decodeAax] Starting decode", {
+    inputPath,
+    outputPath,
+    activationBytes,
+  });
+
+  return new Promise((resolve, reject) => {
+    const args = [
+      "-activation_bytes",
+      activationBytes,
+      "-i",
+      inputPath,
+      "-c",
+      "copy",
+      outputPath,
+    ];
+
+    logger.info("[decoder.decodeAax] Running ffmpeg", {
+      command: `ffmpeg ${args.join(" ")}`,
+    });
+
+    const ffmpeg = spawn("ffmpeg", args);
+    let stderr = "";
+
+    ffmpeg.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    ffmpeg.on("close", (code) => {
+      if (code === 0) {
+        logger.info("[decoder.decodeAax] Decode completed successfully", {
+          inputPath,
+          outputPath,
+        });
+        resolve();
+      } else {
+        const errorMsg = stderr.slice(-2000);
+        logger.error("[decoder.decodeAax] Decode failed", {
+          inputPath,
+          exitCode: code,
+          stderr: errorMsg,
+        });
+        reject(new Error(`FFmpeg exited with code ${code}: ${errorMsg}`));
+      }
+    });
+
+    ffmpeg.on("error", (err) => {
+      logger.error("[decoder.decodeAax] FFmpeg spawn error", {
+        inputPath,
+        error: err.message,
+      });
+      reject(new Error(`Failed to spawn FFmpeg: ${err.message}`));
+    });
+  });
+}

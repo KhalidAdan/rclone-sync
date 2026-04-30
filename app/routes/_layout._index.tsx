@@ -34,7 +34,7 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
   const destinationPathRef = useRef("");
 
   const hasActiveServerJob = recentJobs.some((j) =>
-    ["UPLOADING", "STAGED", "QUEUED", "ARCHIVING", "VERIFYING"].includes(j.status)
+    ["UPLOADING", "STAGED", "DECODING", "DECODED", "QUEUED", "ARCHIVING", "VERIFYING"].includes(j.status)
   );
 
   const serverArchiving = recentJobs.filter((j) => ["QUEUED", "ARCHIVING", "VERIFYING"].includes(j.status)).length;

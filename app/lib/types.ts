@@ -1,11 +1,14 @@
 export const JOB_STATUSES = [
   "UPLOADING",
   "STAGED",
+  "DECODING",
+  "DECODED",
   "QUEUED",
   "ARCHIVING",
   "VERIFYING",
   "COMPLETED",
   "UPLOAD_FAILED",
+  "DECODE_FAILED",
   "ARCHIVE_FAILED",
   "VERIFY_FAILED",
   "ABANDONED",
@@ -13,6 +16,8 @@ export const JOB_STATUSES = [
 
 export const JOB_EVENT_TYPES = [
   "created",
+  "decoding",
+  "decoded",
   "queued",
   "archiving",
   "verifying",
