@@ -15,8 +15,10 @@ WORKDIR /app
 RUN npm run build
 
 FROM node:20-alpine
-# ffmpeg is required by the AAX -> M4B decode step
-RUN apk add --no-cache ffmpeg
+# ffmpeg: AAX -> M4B decode step. rclone CLI: streaming/download reads
+# straight from the crypt remote (`rclone cat`); mount your rclone.conf
+# into the container (e.g. RCLONE_CONFIG=/config/rclone.conf).
+RUN apk add --no-cache ffmpeg rclone
 
 COPY ./package.json package-lock.json /app/
 COPY --from=production-dependencies-env /app/node_modules /app/node_modules

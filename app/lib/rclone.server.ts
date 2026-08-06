@@ -49,6 +49,8 @@ export interface RcloneStats {
 }
 
 export interface RcloneListEntry {
+  /** Path relative to the listed root (differs from Name when recursing). */
+  Path: string;
   Name: string;
   Size: number;
   ModTime: string;
@@ -86,11 +88,25 @@ export async function copyFile(
 export async function listFiles(
   fs: string,
   remote: string,
+  opts?: { recurse?: boolean },
 ): Promise<{ list: RcloneListEntry[] }> {
-  logger.debug("[rclone.listFiles] Request:", { fs, remote });
-  const data = await rcloneJson("/operations/list", { fs, remote });
+  logger.debug("[rclone.listFiles] Request:", { fs, remote, opts });
+  const data = await rcloneJson("/operations/list", {
+    fs,
+    remote,
+    ...(opts?.recurse ? { opt: { recurse: true } } : {}),
+  });
   logger.debug("[rclone.listFiles] Response:", { count: data.list?.length });
   return { list: data.list || [] };
+}
+
+/** Permanently delete a single file from the remote. */
+export async function deleteFile(fs: string, remote: string): Promise<void> {
+  logger.info("[rclone.deleteFile] Request:", { fs, remote });
+  const data = await rcloneJson("/operations/deletefile", { fs, remote });
+  if (data.error) {
+    throw new Error(data.error);
+  }
 }
 
 export async function getJobStatus(jobid: number): Promise<RcloneJobStatus> {

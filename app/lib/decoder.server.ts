@@ -23,6 +23,10 @@ export async function decodeAax(
       inputPath,
       "-c",
       "copy",
+      // moov atom up front: the archived M4B streams instantly via
+      // ranged reads instead of needing the whole file first.
+      "-movflags",
+      "+faststart",
       outputPath,
     ];
 

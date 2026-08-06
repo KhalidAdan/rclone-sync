@@ -3,6 +3,7 @@ import * as path from "path";
 import { db } from "../db/client.server";
 import { jobs } from "../db/schema";
 import { logJobEvent } from "./jobEvents.server";
+import { m4bNameOf } from "./types";
 import { watchJob, startNextQueued } from "./jobWatcher.server";
 import { copyFile } from "./rclone.server";
 import { config } from "./config.server";
@@ -65,10 +66,14 @@ async function launchArchive(id: string) {
     return;
   }
 
+  // The M4B is the archived asset: playable forever without activation
+  // bytes, encrypted at rest by the crypt remote. The uploaded AAX is a
+  // staging-only artifact and never leaves the box.
+  const m4bName = m4bNameOf(job.filename);
   const srcFs = path.join(config.stagingDir, id) + path.sep;
-  const srcRemote = job.filename;
+  const srcRemote = m4bName;
   const dstFs = config.rcloneRemote;
-  const dstRemote = `${job.destinationPath}${job.filename}`;
+  const dstRemote = `${job.destinationPath}${m4bName}`;
 
   logger.debug("[archiver.launchArchive] rclone copyfile params:", {
     srcFs,

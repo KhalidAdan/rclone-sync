@@ -4,7 +4,8 @@ import {
 } from "../lib/download.server";
 import { logger } from "../lib/logger.server";
 
-export async function loader() {
+/** Bulk ZIP export of not-yet-downloaded books (escape hatch). */
+export async function loader({ request }: { request: Request }) {
   logger.info("[api/download-all] Download all requested");
 
   const validJobs = await findDownloadableJobs();
@@ -20,5 +21,5 @@ export async function loader() {
     count: validJobs.length,
   });
 
-  return zipDownloadResponse(validJobs);
+  return zipDownloadResponse(validJobs, request.signal);
 }

@@ -42,10 +42,14 @@ async function runDecodeStep(jobId: string, filename: string): Promise<boolean> 
   try {
     await decodeAax(inputPath, outputPath, config.activationBytes);
 
+    // Exact M4B size feeds Content-Length/Range when streaming later.
+    const { size: m4bSizeBytes } = await fs.stat(outputPath);
+
     await db
       .update(jobs)
       .set({
         status: "DECODED",
+        m4bSizeBytes,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(jobs.id, jobId));

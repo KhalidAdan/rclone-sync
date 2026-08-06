@@ -3,6 +3,7 @@ const FAIL_STAGES = [
   "DECODE_FAILED",
   "ARCHIVE_FAILED",
   "VERIFY_FAILED",
+  "RESTORE_FAILED",
 ];
 
 // The ring tells the whole story: 0–25% upload, 25–50% decode,
@@ -11,6 +12,8 @@ const FAIL_STAGES = [
 const STAGE_BASE: Record<string, number> = {
   PENDING: 0,
   UPLOADING: 0,
+  RESTORE_QUEUED: 0,
+  RESTORING: 0.125,
   STAGED: 0.25,
   DECODING: 0.375,
   DECODED: 0.5,
@@ -22,6 +25,7 @@ const STAGE_BASE: Record<string, number> = {
 
 const FAIL_PROGRESS: Record<string, number> = {
   UPLOAD_FAILED: 0.25,
+  RESTORE_FAILED: 0.25,
   DECODE_FAILED: 0.5,
   ARCHIVE_FAILED: 0.75,
   VERIFY_FAILED: 0.9,
@@ -141,6 +145,8 @@ export function stageLabel(stage: string): string {
   const map: Record<string, string> = {
     PENDING: "Waiting…",
     UPLOADING: "Uploading…",
+    RESTORE_QUEUED: "Migration queued",
+    RESTORING: "Restoring…",
     STAGED: "Staged",
     DECODING: "Decoding…",
     DECODED: "Decoded",
@@ -152,6 +158,7 @@ export function stageLabel(stage: string): string {
     DECODE_FAILED: "Decode failed",
     ARCHIVE_FAILED: "Archive failed",
     VERIFY_FAILED: "Verify failed",
+    RESTORE_FAILED: "Restore failed",
   };
   return map[stage] || stage;
 }

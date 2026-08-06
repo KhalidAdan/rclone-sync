@@ -37,6 +37,8 @@ const ACTIVE_STATUSES = [
   "QUEUED",
   "ARCHIVING",
   "VERIFYING",
+  "RESTORE_QUEUED",
+  "RESTORING",
 ];
 
 function parseJobError(job: StreamedJob): string | undefined {

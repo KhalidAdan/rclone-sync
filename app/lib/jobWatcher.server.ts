@@ -4,7 +4,13 @@ import * as fs from "node:fs/promises";
 import { db } from "../db/client.server";
 import { jobs } from "../db/schema";
 import { logJobEvent } from "./jobEvents.server";
-import { listFiles, getJobStatus, type RcloneJobStatus } from "./rclone.server";
+import { m4bNameOf } from "./types";
+import {
+  listFiles,
+  getJobStatus,
+  deleteFile,
+  type RcloneJobStatus,
+} from "./rclone.server";
 import { config } from "./config.server";
 import { logger } from "./logger.server";
 
@@ -99,28 +105,42 @@ async function failArchive(id: string, message: string) {
 /**
  * Verify a VERIFYING job against the remote listing and finish it.
  * Shared by the watcher and startup recovery.
+ *
+ * On success: record the archived M4B (format + exact size), clean up the
+ * legacy remote AAX if this was a migration, and delete local staging —
+ * B2 is now the source of truth, so nothing needs to linger on disk.
  */
 export async function finishVerification(id: string) {
-  let verified = false;
+  let remoteM4b: { size: number } | null = null;
   try {
-    verified = await verifyArchive(id);
+    remoteM4b = await verifyArchive(id);
   } catch (err) {
     logger.error("[jobWatcher.finishVerification] Verification errored:", { jobId: id, error: String(err) });
   }
 
-  if (verified) {
+  if (remoteM4b) {
+    const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
+
     await db
       .update(jobs)
-      .set({ status: "COMPLETED", updatedAt: new Date().toISOString() })
+      .set({
+        status: "COMPLETED",
+        archivedAs: "m4b",
+        m4bSizeBytes: remoteM4b.size,
+        updatedAt: new Date().toISOString(),
+      })
       .where(eq(jobs.id, id));
     await logJobEvent(id, "completed", "Archive verified successfully");
 
-    const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
-    if (job?.downloadedAt) {
-      await cleanupFull(id);
-    } else {
-      await cleanupAax(id);
+    // Migration jobs carried a legacy AAX in the remote. The M4B is now
+    // verified present — delete the AAX, but only if the M4B size passes
+    // a sanity check (remux output is nearly the same size as the input;
+    // a tiny M4B means something went badly wrong).
+    if (job?.archivedAs === "aax") {
+      await deleteLegacyRemoteAax(job.id, job.filename, job.destinationPath, job.sizeBytes, remoteM4b.size);
     }
+
+    await cleanupFull(id);
   } else {
     await db
       .update(jobs)
@@ -134,6 +154,46 @@ export async function finishVerification(id: string) {
       })
       .where(eq(jobs.id, id));
     await logJobEvent(id, "failed", "Verification failed - file not found in remote");
+  }
+}
+
+const MIN_SANE_M4B_BYTES = 1024 * 1024;
+
+async function deleteLegacyRemoteAax(
+  jobId: string,
+  aaxFilename: string,
+  destinationPath: string,
+  aaxSizeBytes: number,
+  m4bSizeBytes: number,
+) {
+  const aaxRemote = `${destinationPath}${aaxFilename}`;
+  const sane =
+    m4bSizeBytes >= MIN_SANE_M4B_BYTES &&
+    (aaxSizeBytes <= 0 || m4bSizeBytes >= aaxSizeBytes * 0.5);
+
+  if (!sane) {
+    logger.warn("[jobWatcher.deleteLegacyRemoteAax] M4B size failed sanity check — keeping remote AAX:", {
+      jobId,
+      aaxRemote,
+      aaxSizeBytes,
+      m4bSizeBytes,
+    });
+    await logJobEvent(jobId, "completed", "Legacy AAX kept in remote (M4B size sanity check failed)");
+    return;
+  }
+
+  try {
+    await deleteFile(config.rcloneRemote, aaxRemote);
+    logger.info("[jobWatcher.deleteLegacyRemoteAax] Deleted legacy remote AAX:", { jobId, aaxRemote });
+    await logJobEvent(jobId, "completed", `Legacy AAX removed from archive: ${aaxRemote}`);
+  } catch (err) {
+    // Non-fatal: the M4B is safe; an orphaned AAX just costs storage.
+    logger.error("[jobWatcher.deleteLegacyRemoteAax] Failed to delete remote AAX:", {
+      jobId,
+      aaxRemote,
+      error: String(err),
+    });
+    await logJobEvent(jobId, "failed", `Could not remove legacy AAX (M4B is safe): ${String(err)}`);
   }
 }
 
@@ -158,24 +218,27 @@ export async function startNextQueued() {
   }
 }
 
-export async function verifyArchive(id: string): Promise<boolean> {
+/**
+ * Check the remote listing for this job's M4B. Returns its size when
+ * present, null otherwise. The destination folder is passed as the list
+ * *path* (not appended to the fs string, which mangles crypt remotes).
+ */
+export async function verifyArchive(id: string): Promise<{ size: number } | null> {
   logger.info("[jobWatcher.verifyArchive] Verifying job:", { jobId: id });
 
   const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
   if (!job) {
     logger.error("[jobWatcher.verifyArchive] Job not found:", { jobId: id });
-    return false;
+    return null;
   }
 
-  const fsPath = job.destinationPath
-    ? `${config.rcloneRemote}${job.destinationPath}`
-    : config.rcloneRemote;
+  const m4bName = m4bNameOf(job.filename);
+  const dir = job.destinationPath.replace(/\/+$/, "");
+  const { list } = await listFiles(config.rcloneRemote, dir);
+  const entry = list.find((e) => !e.IsDir && e.Name === m4bName);
+  logger.debug("[jobWatcher.verifyArchive] M4B found:", { jobId: id, found: !!entry });
 
-  const { list } = await listFiles(fsPath, "");
-  const found = list.some((entry) => entry.Name === job.filename);
-  logger.debug("[jobWatcher.verifyArchive] File found:", { jobId: id, found });
-
-  return found;
+  return entry ? { size: entry.Size } : null;
 }
 
 export async function cleanupStaging(id: string) {
@@ -187,25 +250,6 @@ export async function cleanupStaging(id: string) {
     logger.info("[jobWatcher.cleanupStaging] Cleanup complete", { jobId: id });
   } catch (err) {
     logger.error("[jobWatcher.cleanupStaging] Cleanup error:", { error: String(err) });
-  }
-}
-
-export async function cleanupAax(jobId: string) {
-  logger.info("[jobWatcher.cleanupAax] Deleting AAX file:", { jobId });
-
-  const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
-  if (!job) {
-    logger.error("[jobWatcher.cleanupAax] Job not found:", { jobId });
-    return;
-  }
-
-  const aaxPath = path.join(config.stagingDir, jobId, job.filename);
-
-  try {
-    await fs.rm(aaxPath, { force: true });
-    logger.info("[jobWatcher.cleanupAax] AAX deleted:", { jobId, aaxPath });
-  } catch (err) {
-    logger.error("[jobWatcher.cleanupAax] Error deleting AAX:", { jobId, error: String(err) });
   }
 }
 

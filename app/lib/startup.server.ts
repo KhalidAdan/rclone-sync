@@ -1,15 +1,17 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/client.server";
 import { jobs } from "../db/schema";
+import * as fs from "node:fs/promises";
 import {
   watchJob,
   settleFinishedArchive,
   finishVerification,
   cleanupFull,
-  cleanupAax,
   cleanupStaging,
   startNextQueued,
 } from "./jobWatcher.server";
+import { kickMigrationRunner } from "./migration.server";
+import { config } from "./config.server";
 import { startOrQueueArchive } from "./archiver.server";
 import { logJobEvent } from "./jobEvents.server";
 import { processJob } from "./pipeline.server";
@@ -154,17 +156,36 @@ export async function recoverOrphanedJobs() {
     await finishVerification(job.id);
   }
 
-  // Kick the queue in case recovery left it idle.
-  await startNextQueued();
+  // RESTORING: the pull from B2 died with the process. Re-queue (restore
+  // is idempotent — it just re-copies into staging).
+  const restoring = await db.select().from(jobs).where(eq(jobs.status, "RESTORING"));
+  for (const job of restoring) {
+    if (!olderThanRecoveryAge(job.updatedAt)) continue;
+    logger.warn("[startup.recover] Re-queueing orphaned RESTORING job:", { jobId: job.id });
+    await db
+      .update(jobs)
+      .set({ status: "RESTORE_QUEUED", updatedAt: new Date().toISOString() })
+      .where(eq(jobs.id, job.id));
+  }
 
-  // COMPLETED jobs with stale staging leftovers.
-  const completed = await db.select().from(jobs).where(eq(jobs.status, "COMPLETED"));
-  for (const job of completed) {
-    if (job.downloadedAt) {
-      await cleanupFull(job.id);
-    } else {
-      await cleanupAax(job.id);
+  // Kick the queues in case recovery left them idle.
+  await startNextQueued();
+  kickMigrationRunner();
+
+  // Sweep staging: any directory belonging to a COMPLETED job is dead
+  // weight (B2 holds the M4B). Walk the actual directories rather than
+  // all completed rows — imported rows never had staging.
+  try {
+    const entries = await fs.readdir(config.stagingDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, entry.name)).limit(1);
+      if (job?.status === "COMPLETED") {
+        await cleanupFull(job.id);
+      }
     }
+  } catch (err) {
+    logger.warn("[startup.recover] Staging sweep failed:", { error: String(err) });
   }
 
   logger.info("[startup.recover] Recovery pass complete");
