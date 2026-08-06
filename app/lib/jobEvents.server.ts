@@ -13,4 +13,9 @@ export async function logJobEvent(
     message,
     timestamp: new Date().toISOString(),
   });
+
+  // Every pipeline transition logs an event, which makes this the single
+  // choke point for pushing live updates to connected browsers.
+  const { publishJobUpdate } = await import("./events.server");
+  publishJobUpdate(jobId);
 }

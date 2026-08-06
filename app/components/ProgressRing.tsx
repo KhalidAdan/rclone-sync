@@ -1,33 +1,61 @@
-const STAGES = ["UPLOADING", "STAGED", "ARCHIVING", "VERIFYING", "COMPLETED"];
-const FAIL_STAGES = ["UPLOAD_FAILED", "ARCHIVE_FAILED", "VERIFY_FAILED"];
-const STAGE_INDEX: Record<string, number> = { UPLOADING: 0, STAGED: 1, ARCHIVING: 2, VERIFYING: 3, COMPLETED: 4 };
+const FAIL_STAGES = [
+  "UPLOAD_FAILED",
+  "DECODE_FAILED",
+  "ARCHIVE_FAILED",
+  "VERIFY_FAILED",
+];
+
+// The ring tells the whole story: 0–25% upload, 25–50% decode,
+// 50–75% archive to B2, 75–100% verify. A book is only "done" when it is
+// verified safe in the archive.
+const STAGE_BASE: Record<string, number> = {
+  PENDING: 0,
+  UPLOADING: 0,
+  STAGED: 0.25,
+  DECODING: 0.375,
+  DECODED: 0.5,
+  QUEUED: 0.5,
+  ARCHIVING: 0.5,
+  VERIFYING: 0.75,
+  COMPLETED: 1,
+};
+
+const FAIL_PROGRESS: Record<string, number> = {
+  UPLOAD_FAILED: 0.25,
+  DECODE_FAILED: 0.5,
+  ARCHIVE_FAILED: 0.75,
+  VERIFY_FAILED: 0.9,
+};
 
 interface ProgressRingProps {
   stage: string;
   uploadPercent?: number;
+  archivePercent?: number;
   size?: number;
   stroke?: number;
 }
 
-export function ProgressRing({ stage, uploadPercent = 0, size = 88, stroke = 5 }: ProgressRingProps) {
+export function ProgressRing({
+  stage,
+  uploadPercent = 0,
+  archivePercent,
+  size = 88,
+  stroke = 5,
+}: ProgressRingProps) {
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
   const isFailed = FAIL_STAGES.includes(stage);
   const isDone = stage === "COMPLETED";
 
-  let progress = 0;
-  if (isDone) {
-    progress = 1;
-  } else if (isFailed) {
-    const base = stage === "UPLOAD_FAILED" ? 0 : stage === "ARCHIVE_FAILED" ? 0.5 : 0.75;
-    progress = base;
+  let progress: number;
+  if (isFailed) {
+    progress = FAIL_PROGRESS[stage] ?? 0.5;
   } else {
-    const idx = STAGE_INDEX[stage] ?? 0;
-    const stageBase = idx * 0.25;
+    progress = STAGE_BASE[stage] ?? 0;
     if (stage === "UPLOADING") {
-      progress = stageBase + (uploadPercent / 100) * 0.25;
-    } else {
-      progress = stageBase;
+      progress += (uploadPercent / 100) * 0.25;
+    } else if (stage === "ARCHIVING" && archivePercent !== undefined) {
+      progress += (Math.min(100, archivePercent) / 100) * 0.25;
     }
   }
 
@@ -111,12 +139,17 @@ export function StageIcon({ stage }: StageIconProps) {
 
 export function stageLabel(stage: string): string {
   const map: Record<string, string> = {
+    PENDING: "Waiting…",
     UPLOADING: "Uploading…",
     STAGED: "Staged",
+    DECODING: "Decoding…",
+    DECODED: "Decoded",
+    QUEUED: "Queued",
     ARCHIVING: "Archiving…",
     VERIFYING: "Verifying…",
-    COMPLETED: "Done",
+    COMPLETED: "Safe in B2",
     UPLOAD_FAILED: "Upload failed",
+    DECODE_FAILED: "Decode failed",
     ARCHIVE_FAILED: "Archive failed",
     VERIFY_FAILED: "Verify failed",
   };

@@ -2,6 +2,7 @@ import { type RouteConfig, index, route, layout } from "@react-router/dev/routes
 
 export default [
   route("api/upload", "routes/api.upload.ts"),
+  route("api/events", "routes/api.events.ts"),
   route("api/download-all", "routes/api.download-all.ts"),
   route("api/download-selected", "routes/api.download-selected.ts"),
   layout("routes/_layout.tsx", [

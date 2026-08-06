@@ -1,11 +1,14 @@
-import { useEffect, useState, useCallback, useRef } from "react";
-import { useRevalidator } from "react-router";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { desc } from "drizzle-orm";
 import { db } from "../db/client.server";
 import { jobs } from "../db/schema";
-import { config } from "../lib/config.server";
 import { FileCard, type CardJob } from "../components/FileCard";
 import { DropZone } from "../components/DropZone";
+import {
+  useJobStream,
+  type StreamedJob,
+  type StatsFrame,
+} from "../lib/useJobStream";
 
 export async function loader() {
   const recentJobs = await db
@@ -14,7 +17,7 @@ export async function loader() {
     .orderBy(desc(jobs.createdAt))
     .limit(50);
 
-  return { recentJobs, refreshInterval: config.uiRefreshIntervalSec };
+  return { recentJobs };
 }
 
 type QueueItem = {
@@ -22,31 +25,59 @@ type QueueItem = {
   file: File;
   status: "pending" | "uploading" | "done" | "error";
   uploadPercent: number;
+  jobId?: string;
   error?: string;
 };
 
+const ACTIVE_STATUSES = [
+  "UPLOADING",
+  "STAGED",
+  "DECODING",
+  "DECODED",
+  "QUEUED",
+  "ARCHIVING",
+  "VERIFYING",
+];
+
+function parseJobError(job: StreamedJob): string | undefined {
+  if (!job.error) return undefined;
+  try {
+    return JSON.parse(job.error).message;
+  } catch {
+    return job.error;
+  }
+}
+
 export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<typeof loader>> }) {
-  const { recentJobs, refreshInterval } = loaderData;
-  const revalidator = useRevalidator();
+  const { recentJobs } = loaderData;
 
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [destinationPath, setDestinationPath] = useState("");
   const destinationPathRef = useRef("");
 
-  const hasActiveServerJob = recentJobs.some((j) =>
-    ["UPLOADING", "STAGED", "DECODING", "DECODED", "QUEUED", "ARCHIVING", "VERIFYING"].includes(j.status)
+  // Live server state: seeded from the loader, kept fresh by the SSE
+  // stream. This is what lets a card follow its book all the way to
+  // "Safe in B2" instead of lying "done" at upload-received.
+  const [serverJobs, setServerJobs] = useState<Map<string, StreamedJob>>(
+    () => new Map(recentJobs.map((j) => [j.id, j as StreamedJob])),
   );
+  const [archiveStats, setArchiveStats] = useState<StatsFrame | null>(null);
+  // Jobs that transitioned while this page was open: keep their cards
+  // around even after they finish or fail, so the story completes on
+  // screen instead of the card vanishing mid-watch.
+  const seenLiveRef = useRef<Set<string>>(new Set());
 
-  const serverArchiving = recentJobs.filter((j) => ["QUEUED", "ARCHIVING", "VERIFYING"].includes(j.status)).length;
-  const serverStaged = recentJobs.filter((j) => j.status === "STAGED").length;
-  const serverCompleted = recentJobs.filter((j) => j.status === "COMPLETED").length;
-  const hasServerJobs = serverArchiving + serverStaged > 0;
-
-  useEffect(() => {
-    if (!hasActiveServerJob) return;
-    const interval = setInterval(() => revalidator.revalidate(), refreshInterval * 1000);
-    return () => clearInterval(interval);
-  }, [hasActiveServerJob, refreshInterval, revalidator]);
+  useJobStream({
+    onJob: (job) => {
+      seenLiveRef.current.add(job.id);
+      setServerJobs((prev) => {
+        const next = new Map(prev);
+        next.set(job.id, job);
+        return next;
+      });
+    },
+    onStats: (stats) => setArchiveStats(stats),
+  });
 
   const handleFiles = useCallback((files: File[]) => {
     const newItems: QueueItem[] = files.map((file) => ({
@@ -86,7 +117,9 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
           const { jobId } = JSON.parse(xhr.responseText);
           setQueue((prev) =>
             prev.map((item) =>
-              item.localId === localId ? { ...item, status: "done", uploadPercent: 100 } : item
+              item.localId === localId
+                ? { ...item, status: "done", uploadPercent: 100, jobId }
+                : item
             )
           );
         } catch {
@@ -122,10 +155,11 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
     xhr.send(formData);
   }, []);
 
+  // Sequential upload driver: start the next pending upload whenever
+  // nothing is currently uploading.
   useEffect(() => {
     if (queue.length === 0) return;
-    const uploading = queue.find((item) => item.status === "uploading");
-    if (uploading) return;
+    if (queue.some((item) => item.status === "uploading")) return;
     const pending = queue.find((item) => item.status === "pending");
     if (pending) {
       destinationPathRef.current = destinationPath;
@@ -133,18 +167,80 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
     }
   }, [queue, destinationPath, uploadNext]);
 
-  const completedCount = queue.filter((q) => q.status === "done").length;
-  const failedCount = queue.filter((q) => q.status === "error").length;
-  const activeCount = queue.filter((q) => q.status === "pending" || q.status === "uploading").length;
+  // --- Build the card list: local upload legs merged with server state ---
 
-  const cardJobs: CardJob[] = queue.map((q) => ({
-    localId: q.localId,
-    filename: q.file.name,
-    sizeBytes: q.file.size,
-    stage: q.status === "uploading" ? "UPLOADING" : q.status === "done" ? "DONE" : q.status === "error" ? "UPLOAD_FAILED" : "PENDING",
-    uploadPercent: q.uploadPercent,
-    error: q.error,
-  }));
+  const queuedJobIds = new Set(queue.map((q) => q.jobId).filter(Boolean));
+
+  const cardJobs: CardJob[] = queue.map((q) => {
+    const server = q.jobId ? serverJobs.get(q.jobId) : undefined;
+
+    if (q.status === "error") {
+      return {
+        localId: q.localId,
+        filename: q.file.name,
+        sizeBytes: q.file.size,
+        stage: "UPLOAD_FAILED",
+        uploadPercent: q.uploadPercent,
+        error: q.error,
+      };
+    }
+
+    if (!server) {
+      return {
+        localId: q.localId,
+        filename: q.file.name,
+        sizeBytes: q.file.size,
+        stage: q.status === "uploading" ? "UPLOADING" : q.status === "done" ? "STAGED" : "PENDING",
+        uploadPercent: q.uploadPercent,
+      };
+    }
+
+    return {
+      localId: q.localId,
+      filename: server.filename,
+      sizeBytes: server.sizeBytes || q.file.size,
+      stage: server.status,
+      uploadPercent: 100,
+      archivePercent:
+        server.status === "ARCHIVING" &&
+        archiveStats?.jobId === server.id &&
+        archiveStats.totalBytes > 0
+          ? (archiveStats.bytesTransferred / archiveStats.totalBytes) * 100
+          : undefined,
+      error: parseJobError(server),
+    };
+  });
+
+  // Server jobs still in flight that this tab isn't already showing —
+  // uploads from before a refresh, or another device. The pipeline
+  // shouldn't disappear just because the page reloaded.
+  const orphanCards: CardJob[] = [...serverJobs.values()]
+    .filter(
+      (j) =>
+        (ACTIVE_STATUSES.includes(j.status) || seenLiveRef.current.has(j.id)) &&
+        !queuedJobIds.has(j.id),
+    )
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map((j) => ({
+      localId: j.id,
+      filename: j.filename,
+      sizeBytes: j.sizeBytes,
+      stage: j.status,
+      uploadPercent: 100,
+      archivePercent:
+        j.status === "ARCHIVING" &&
+        archiveStats?.jobId === j.id &&
+        archiveStats.totalBytes > 0
+          ? (archiveStats.bytesTransferred / archiveStats.totalBytes) * 100
+          : undefined,
+      error: parseJobError(j),
+    }));
+
+  const allCards = [...cardJobs, ...orphanCards];
+
+  const doneCount = allCards.filter((c) => c.stage === "COMPLETED").length;
+  const failedCount = allCards.filter((c) => c.stage.endsWith("_FAILED")).length;
+  const activeCount = allCards.length - doneCount - failedCount;
 
   const isUploading = queue.some((q) => q.status === "uploading");
 
@@ -157,17 +253,17 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
               Audiobook Archive
             </h1>
             <p style={{ fontSize: 13, color: "var(--text-tertiary)", marginTop: 4 }}>
-              Drop files below to upload
+              Drop files below — they're safe once the ring closes
             </p>
           </div>
           <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
             {activeCount > 0 && (
               <span style={{ color: "var(--ring-active)" }}>
-                {activeCount} uploading
+                {activeCount} in flight
               </span>
             )}
             <span style={{ color: "var(--ring-done)" }}>
-              {completedCount} done
+              {doneCount} safe
             </span>
             {failedCount > 0 && (
               <span style={{ color: "var(--ring-fail)" }}>
@@ -177,37 +273,10 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
           </div>
         </div>
 
-        {hasServerJobs && (
-          <a
-            href="/jobs"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "12px 16px",
-              marginBottom: 16,
-              borderRadius: 12,
-              background: serverArchiving > 0 ? "rgba(139, 92, 246, 0.1)" : "rgba(59, 130, 246, 0.1)",
-              border: `1.5px solid ${serverArchiving > 0 ? "var(--ring-active)" : "#3b82f6"}`,
-              textDecoration: "none",
-              transition: "opacity 200ms",
-            }}
-          >
-            <span style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>
-              {serverArchiving > 0
-                ? `${serverArchiving} job${serverArchiving === 1 ? "" : "s"} currently archiving to B2`
-                : `${serverStaged} file${serverStaged === 1 ? "" : "s"} ready to archive`}
-            </span>
-            <span style={{ fontSize: 13, fontWeight: 500, color: serverArchiving > 0 ? "var(--ring-active)" : "#3b82f6" }}>
-              View Jobs →
-            </span>
-          </a>
-        )}
-
         <div style={{ marginBottom: 16 }}>
           <input
             type="text"
-            placeholder="Destination path (e.g., Fiction/Fantasy/)"
+            placeholder="Destination folder (e.g. Fiction/Fantasy)"
             value={destinationPath}
             onChange={(e) => setDestinationPath(e.target.value)}
             disabled={isUploading}
@@ -227,7 +296,7 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
 
         <DropZone onFiles={handleFiles} />
 
-        {cardJobs.length > 0 && (
+        {allCards.length > 0 && (
           <div
             style={{
               display: "grid",
@@ -236,7 +305,7 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
               marginTop: 24,
             }}
           >
-            {cardJobs.map((job) => (
+            {allCards.map((job) => (
               <FileCard key={job.localId} job={job} />
             ))}
           </div>

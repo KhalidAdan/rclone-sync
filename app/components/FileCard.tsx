@@ -6,6 +6,7 @@ export interface CardJob {
   sizeBytes: number;
   stage: string;
   uploadPercent: number;
+  archivePercent?: number;
   error?: string | null;
 }
 
@@ -13,9 +14,16 @@ interface FileCardProps {
   job: CardJob;
 }
 
+const FAIL_STAGES = [
+  "UPLOAD_FAILED",
+  "DECODE_FAILED",
+  "ARCHIVE_FAILED",
+  "VERIFY_FAILED",
+];
+
 export function FileCard({ job }: FileCardProps) {
-  const { filename, sizeBytes, stage, uploadPercent, error } = job;
-  const isFailed = ["UPLOAD_FAILED", "ARCHIVE_FAILED", "VERIFY_FAILED"].includes(stage);
+  const { filename, sizeBytes, stage, uploadPercent, archivePercent, error } = job;
+  const isFailed = FAIL_STAGES.includes(stage);
   const isDone = stage === "COMPLETED";
 
   const borderVar = isFailed
@@ -23,6 +31,13 @@ export function FileCard({ job }: FileCardProps) {
     : isDone
     ? "var(--ring-done)"
     : "var(--border-idle)";
+
+  const percentText =
+    stage === "UPLOADING"
+      ? `${uploadPercent}%`
+      : stage === "ARCHIVING" && archivePercent !== undefined
+      ? `${Math.min(100, Math.round(archivePercent))}%`
+      : null;
 
   return (
     <div
@@ -46,7 +61,11 @@ export function FileCard({ job }: FileCardProps) {
       }}
     >
       <div style={{ position: "relative", width: 88, height: 88, flexShrink: 0 }}>
-        <ProgressRing stage={stage} uploadPercent={uploadPercent} />
+        <ProgressRing
+          stage={stage}
+          uploadPercent={uploadPercent}
+          archivePercent={archivePercent}
+        />
         <div
           style={{
             position: "absolute",
@@ -56,7 +75,7 @@ export function FileCard({ job }: FileCardProps) {
             justifyContent: "center",
           }}
         >
-          {stage === "UPLOADING" ? (
+          {percentText ? (
             <span
               style={{
                 fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -66,7 +85,7 @@ export function FileCard({ job }: FileCardProps) {
                 letterSpacing: "-0.02em",
               }}
             >
-              {uploadPercent}%
+              {percentText}
             </span>
           ) : (
             <StageIcon stage={stage} />

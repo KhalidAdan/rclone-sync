@@ -1,7 +1,8 @@
 import { desc, eq, sql, inArray, isNull, or, and } from "drizzle-orm";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Form, useRevalidator, useSearchParams } from "react-router";
 import { JobHistory } from "../components/JobHistory";
+import { useJobStream, type StatsFrame } from "../lib/useJobStream";
 import { db } from "../db/client.server";
 import { jobs, jobEvents } from "../db/schema";
 import { config } from "../lib/config.server";
@@ -249,15 +250,49 @@ export default function Jobs({ loaderData }: { loaderData: Awaited<ReturnType<ty
     ["UPLOADING", "STAGED", "DECODING", "QUEUED", "ARCHIVING", "VERIFYING"].includes(j.status)
   );
 
+  // Server pushes transitions over SSE; revalidate (debounced) so the table
+  // reflects them without blind polling. Transfer stats update the progress
+  // bar directly — no loader round-trip.
+  const [liveStats, setLiveStats] = useState<StatsFrame | null>(null);
+  const revalidateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useJobStream({
+    onJob: () => {
+      if (revalidateTimer.current) return;
+      revalidateTimer.current = setTimeout(() => {
+        revalidateTimer.current = null;
+        revalidator.revalidate();
+      }, 300);
+    },
+    onStats: (stats) => setLiveStats(stats),
+  });
   useEffect(() => {
-    if (!hasActiveJob) return;
-    const interval = setInterval(() => revalidator.revalidate(), refreshInterval * 1000);
-    return () => clearInterval(interval);
-  }, [hasActiveJob, refreshInterval, revalidator]);
+    return () => {
+      if (revalidateTimer.current) clearTimeout(revalidateTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     setSelectedJobs(new Set());
   }, [page, limit]);
+
+  // Drop stale stats once nothing is archiving anymore.
+  const hasArchivingJob = allJobs.some((j) => j.status === "ARCHIVING");
+  useEffect(() => {
+    if (!hasArchivingJob) setLiveStats(null);
+  }, [hasArchivingJob]);
+
+  const displayProgress = liveStats
+    ? {
+        bytesTransferred: liveStats.bytesTransferred,
+        totalBytes: liveStats.totalBytes,
+        speed: liveStats.speed,
+        eta: liveStats.eta,
+        percentage:
+          liveStats.totalBytes > 0
+            ? Math.min(100, Math.round((liveStats.bytesTransferred / liveStats.totalBytes) * 100))
+            : 0,
+      }
+    : liveProgress;
 
   const isDownloadable = (job: typeof allJobs[0]) => 
     job.downloadedAt === null && downloadableStatuses.includes(job.status);
@@ -374,25 +409,25 @@ export default function Jobs({ loaderData }: { loaderData: Awaited<ReturnType<ty
         </div>
       )}
 
-      {liveProgress && (
+      {displayProgress && (
         <div className="rounded-xl border border-purple-200 bg-purple-50 p-4">
           <div className="flex items-center justify-between mb-3">
             <p className="text-sm font-medium text-purple-900">Archiving in progress</p>
             <p className="text-xs text-purple-600 tabular-nums">
-              {formatBytes(liveProgress.bytesTransferred)} / {formatBytes(liveProgress.totalBytes)}
+              {formatBytes(displayProgress.bytesTransferred)} / {formatBytes(displayProgress.totalBytes)}
               {" · "}
-              {formatSpeed(liveProgress.speed)}
+              {formatSpeed(displayProgress.speed)}
               {" · "}
-              ETA {formatEta(liveProgress.eta)}
+              ETA {formatEta(displayProgress.eta)}
             </p>
           </div>
           <div className="h-1.5 w-full rounded-full bg-purple-200">
             <div
               className="h-1.5 rounded-full bg-purple-600 transition-all duration-700"
-              style={{ width: `${liveProgress.percentage}%` }}
+              style={{ width: `${displayProgress.percentage}%` }}
             />
           </div>
-          <p className="mt-1.5 text-right text-xs text-purple-500">{liveProgress.percentage}%</p>
+          <p className="mt-1.5 text-right text-xs text-purple-500">{displayProgress.percentage}%</p>
         </div>
       )}
 
