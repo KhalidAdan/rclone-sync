@@ -134,22 +134,42 @@ Three nav items become one screen. Every click that exists today to answer
 | 0 | Make it correct | Audit fix-order items 1–6 (dead recovery, ffmpeg -y, download rewrite, Dockerfile, phantom dep, store-mode zip) | ~2 days |
 | 1 | Tell the truth | SSE events endpoint (culvert `channel()`), per-job rclone stats, unified library page with honest lifecycle cards, jobs→drawer | ~3 days |
 | 2 | Make it beautiful | ffprobe metadata + covers, auto-organize destination, folder picker, one design system (Tailwind + ui.sh skills), empty states | ~3 days |
-| 3 | Make it the goal | M4B-to-B2 (decision above), Range streaming route, `<audio>` player with chapters + resume, restore-from-B2 | ~1 week |
+| 3 | Make it the goal | M4B-only archiving (+faststart), B2 reconciliation import, AAX→M4B migration of legacy remote content, Range streaming route, `<audio>` player with chapters + resume | ~1 week |
 | 4 | Make it culvert | activation-bytes auto-derivation from AAX header, `@culvert/cipher` design + integration, write the case-study blog post | open-ended |
 
 Phase 0 is non-negotiable before anything else — several fixes (recovery,
 retry, Docker) are prerequisites for trusting the app with the only copies of
 your books. Phases 1–2 are pure product; 3 is the payoff; 4 feeds culvert.
 
-## Open questions for you
+## Open questions — DECIDED (2026-08-06, with Khalid)
 
-1. Archive M4B alongside AAX (my rec), M4B-only, or AAX-only + on-demand
-   transcode?
-2. Is download-as-ZIP still a real need once streaming exists, or does it
-   become "download this one book" (no ZIP at all — just stream the M4B file
-   as an attachment, simpler and resumable)?
-3. Auth: stay Tailscale-only, or add a passkey/simple login so it can ever
-   leave the tailnet (streaming from a friend's wifi)?
-4. Should the library reconcile *existing* B2 content (books uploaded via
-   rclone CLI before this app existed) into SQLite, so day one shows your
-   whole collection?
+1. **Archive format → M4B-only.** The crypt remote already encrypts
+   everything at rest (defensibility holds: ciphertext in the bucket, key
+   never leaves the box), the M4B is the self-sufficient asset (playable
+   without activation bytes forever), and storing both doubles cost for no
+   benefit. The AAX becomes a staging-only artifact: upload → decode →
+   archive the M4B → verify → delete the AAX.
+   Consequences:
+   - Archiver copies `<name>.m4b` (not the AAX); verification checks for
+     the M4B name in the remote listing.
+   - Decode should write `-movflags +faststart` (moov up front) so the
+     archived M4B streams instantly via ranged reads in Phase 3.
+   - **Migration needed:** the ~307 books already in B2 are AAX-only.
+     One-time batch: pull each AAX from crypt → decode → upload M4B →
+     verify → delete the remote AAX. Design this as a resumable job type
+     so it survives restarts; it folds naturally into the reconciliation
+     work from decision 4.
+2. **ZIP download → de-scoped.** Once streaming exists, download is
+   "this one book" as a plain M4B attachment (resumable, range-friendly —
+   eventually served straight from crypt). Keep `@culvert/zip` only for an
+   optional bulk-export escape hatch; it is no longer a primary flow.
+3. **Auth → Tailscale-only, permanently.** Single-user by design; the
+   library never leaves the tailnet. No login system, no sharing features —
+   deliberate, and consistent with the no-distribution stance. This also
+   keeps the streaming route simple (no tokens, no session logic).
+4. **Reconciliation → yes.** Day one of the library page should show the
+   whole collection: scan `remote-crypt:` recursively, import unknown files
+   into SQLite as adopted rows (COMPLETED-equivalent, no local staging),
+   and mark AAX-only entries as candidates for the migration in decision 1.
+   The library then has one source of truth to render, and the app finally
+   owns books it didn't personally upload.
