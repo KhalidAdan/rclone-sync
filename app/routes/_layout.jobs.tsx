@@ -5,7 +5,6 @@ import { JobHistory } from "../components/JobHistory";
 import { db } from "../db/client.server";
 import { jobs, jobEvents } from "../db/schema";
 import { config } from "../lib/config.server";
-import { startOrQueueArchive } from "../lib/archiver.server";
 import { getStats } from "../lib/rclone.server";
 
 type StatusMeta = {
@@ -114,11 +113,6 @@ export async function loader({ request }: { request: Request }) {
     events: jobEventsForPage.filter(e => e.jobId === job.id),
   }));
 
-  const stagedJobs = jobsWithEvents.filter((j) => j.status === "STAGED");
-  if (stagedJobs.length > 0) {
-    await startOrQueueArchive(stagedJobs[0].id);
-  }
-
   const downloadableStatusesCond = or(
     eq(jobs.status, "DECODED"),
     eq(jobs.status, "QUEUED"),
@@ -152,9 +146,11 @@ export async function loader({ request }: { request: Request }) {
   const archiving = jobsWithEvents.find((j) => j.status === "ARCHIVING");
   let liveProgress = null;
 
-  if (archiving) {
+  if (archiving && archiving.rcloneJobId) {
     try {
-      const stats = await getStats();
+      // Scope stats to this transfer — global stats are cumulative since
+      // rclone started and produce nonsense percentages.
+      const stats = await getStats(`job/${archiving.rcloneJobId}`);
       liveProgress = {
         jobId: archiving.id,
         bytesTransferred: stats.bytes ?? 0,
@@ -194,18 +190,18 @@ export async function action({ request }: { request: Request }) {
   if (intent === "retry") {
     const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
     if (job) {
+      // Re-enter the state machine at the failed step. processJob and
+      // startOrQueueArchive set the correct status themselves — no fake
+      // intermediate STAGED state.
+      await db
+        .update(jobs)
+        .set({ retryCount: job.retryCount + 1, error: null, updatedAt: new Date().toISOString() })
+        .where(eq(jobs.id, jobId));
+
       if (job.status === "DECODE_FAILED") {
-        await db
-          .update(jobs)
-          .set({ status: "STAGED", retryCount: job.retryCount + 1, error: null, updatedAt: new Date().toISOString() })
-          .where(eq(jobs.id, jobId));
         const { processJob } = await import("../lib/pipeline.server");
         processJob(jobId).catch((err) => console.error("Retry decode error:", err));
       } else {
-        await db
-          .update(jobs)
-          .set({ status: "STAGED", retryCount: job.retryCount + 1, error: null, updatedAt: new Date().toISOString() })
-          .where(eq(jobs.id, jobId));
         const { startOrQueueArchive } = await import("../lib/archiver.server");
         await startOrQueueArchive(jobId);
       }
@@ -472,7 +468,14 @@ export default function Jobs({ loaderData }: { loaderData: Awaited<ReturnType<ty
                     <tbody className="divide-y divide-gray-100">
                       {jobsInState.map((job, idx) => {
                         const canDownload = isDownloadable(job);
-                        const error = job.error ? JSON.parse(job.error) : null;
+                        let error: { phase?: string; message?: string } | null = null;
+                        if (job.error) {
+                          try {
+                            error = JSON.parse(job.error);
+                          } catch {
+                            error = { phase: job.status, message: job.error };
+                          }
+                        }
                         const isRetryable = ["ARCHIVE_FAILED", "VERIFY_FAILED", "DECODE_FAILED"].includes(job.status);
 
                         return (

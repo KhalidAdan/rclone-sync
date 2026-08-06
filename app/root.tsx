@@ -8,7 +8,14 @@ import {
 } from "react-router";
 
 import type { Route } from "./+types/root";
+import { ensureStartup } from "./lib/startup.server";
 import "./app.css";
+
+export async function loader() {
+  // Once per process: validate config + recover jobs orphaned by a restart.
+  await ensureStartup();
+  return null;
+}
 
 export const links: Route.LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },

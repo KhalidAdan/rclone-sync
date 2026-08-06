@@ -1,25 +1,13 @@
 import { eq } from "drizzle-orm";
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import { db } from "../db/client.server";
-import { jobs, jobEvents } from "../db/schema";
+import { jobs } from "../db/schema";
 import { decodeAax } from "./decoder.server";
 import { startOrQueueArchive } from "./archiver.server";
+import { logJobEvent } from "./jobEvents.server";
 import { config } from "./config.server";
 import { logger } from "./logger.server";
-
-async function logJobEvent(
-  jobId: string,
-  eventType: "created" | "decoding" | "decoded" | "queued" | "archiving" | "verifying" | "completed" | "failed" | "abandoned",
-  message: string
-) {
-  const now = new Date().toISOString();
-  await db.insert(jobEvents).values({
-    jobId,
-    eventType,
-    message,
-    timestamp: now,
-  });
-}
 
 export async function processJob(jobId: string): Promise<void> {
   logger.info("[pipeline.processJob] Starting pipeline for job:", { jobId });
@@ -72,11 +60,15 @@ async function runDecodeStep(jobId: string, filename: string): Promise<boolean> 
     const message = err instanceof Error ? err.message : String(err);
     logger.error("[pipeline.runDecodeStep] Decode failed:", { jobId, error: message });
 
+    // Don't leave a partial M4B behind — it would be picked up by the
+    // download endpoints' "does the M4B exist" check.
+    await fs.rm(outputPath, { force: true }).catch(() => {});
+
     await db
       .update(jobs)
       .set({
         status: "DECODE_FAILED",
-        error: JSON.stringify({ step: "decode", message }),
+        error: JSON.stringify({ phase: "DECODING", message }),
         updatedAt: new Date().toISOString(),
       })
       .where(eq(jobs.id, jobId));

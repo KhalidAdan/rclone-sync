@@ -9,11 +9,14 @@ export async function decodeAax(
   logger.info("[decoder.decodeAax] Starting decode", {
     inputPath,
     outputPath,
-    activationBytes,
   });
 
   return new Promise((resolve, reject) => {
+    // -nostdin: never prompt (no TTY in server context)
+    // -y: overwrite partial output left behind by a failed/interrupted decode
     const args = [
+      "-nostdin",
+      "-y",
       "-activation_bytes",
       activationBytes,
       "-i",
@@ -22,10 +25,6 @@ export async function decodeAax(
       "copy",
       outputPath,
     ];
-
-    logger.info("[decoder.decodeAax] Running ffmpeg", {
-      command: `ffmpeg ${args.join(" ")}`,
-    });
 
     const ffmpeg = spawn("ffmpeg", args);
     let stderr = "";

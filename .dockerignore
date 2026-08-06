@@ -2,3 +2,9 @@
 build
 node_modules
 README.md
+# never bake local data or secrets into image layers
+data
+.env
+docs
+tasks
+.claude

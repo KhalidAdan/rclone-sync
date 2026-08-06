@@ -9,9 +9,12 @@ const envSchema = z.object({
   STAGING_DIR: z.string().default("staging"),
   RCLONE_URL: z.string().url().default("http://localhost:5572"),
   RCLONE_REMOTE: z.string().default("audiobooks:"),
+  RCLONE_USER: z.string().optional(),
+  RCLONE_PASS: z.string().optional(),
   DB_FILENAME: z.string().default("audiobook-archive.db"),
   PORT: z.coerce.number().int().positive().default(3001),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  UI_REFRESH_INTERVAL_SEC: z.coerce.number().int().positive().default(3),
   ACTIVATION_BYTES: z.string().min(1),
 });
 
