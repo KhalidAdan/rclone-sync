@@ -135,6 +135,14 @@ Three nav items become one screen. Every click that exists today to answer
 | 1 | Tell the truth | SSE events endpoint (culvert `channel()`), per-job rclone stats, unified library page with honest lifecycle cards, jobs→drawer | ~3 days |
 | 2 | Make it beautiful | ffprobe metadata + covers, auto-organize destination, folder picker, one design system (Tailwind + ui.sh skills), empty states | ~3 days |
 | 3 | Make it the goal | M4B-only archiving (+faststart), B2 reconciliation import, AAX→M4B migration of legacy remote content, Range streaming route, `<audio>` player with chapters + resume | ~1 week |
+
+> **Phase 3 core shipped** in commit `aa662a1` (2026-08-06): M4B-only
+> pipeline, Sync-with-B2 reconciliation (296 legacy AAX annotated), the
+> resumable migration job type, Range streaming from crypt, and the player
+> with localStorage resume — verified live end-to-end (stream + seek from
+> B2). Still open from Phase 3: chapter markers (needs ffprobe metadata,
+> Phase 2). Migration of the 296 books is queued up behind the "Migrate
+> 296 legacy AAX" button — deliberately left for Khalid to fire.
 | 4 | Make it culvert | activation-bytes auto-derivation from AAX header, `@culvert/cipher` design + integration, write the case-study blog post | open-ended |
 
 Phase 0 is non-negotiable before anything else — several fixes (recovery,
