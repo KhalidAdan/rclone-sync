@@ -216,11 +216,22 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
   // Server jobs still in flight that this tab isn't already showing —
   // uploads from before a refresh, or another device. The pipeline
   // shouldn't disappear just because the page reloaded.
+  //
+  // Exception: an UPLOADING server row whose filename matches one of our
+  // own in-flight uploads is *this tab's* upload — its jobId just hasn't
+  // come back from the XHR yet. Rendering it would show a ghost twin.
+  const uploadingLocalNames = new Set(
+    queue
+      .filter((q) => q.status === "uploading" || q.status === "pending")
+      .map((q) => q.file.name),
+  );
+
   const orphanCards: CardJob[] = [...serverJobs.values()]
     .filter(
       (j) =>
         (ACTIVE_STATUSES.includes(j.status) || seenLiveRef.current.has(j.id)) &&
-        !queuedJobIds.has(j.id),
+        !queuedJobIds.has(j.id) &&
+        !(j.status === "UPLOADING" && uploadingLocalNames.has(j.filename)),
     )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .map((j) => ({

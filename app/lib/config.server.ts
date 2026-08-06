@@ -52,8 +52,18 @@ export async function validateConfig() {
       headers,
       signal: AbortSignal.timeout(5000),
     });
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        `rclone at ${config.rcloneUrl} rejected our credentials (${res.status}). ` +
+          `Start the daemon with "rclone rcd --rc-no-auth", or set ` +
+          `RCLONE_USER/RCLONE_PASS in .env to match --rc-user/--rc-pass.`,
+      );
+    }
     if (!res.ok) throw new Error(`rclone returned ${res.status}`);
   } catch (err) {
+    if (err instanceof Error && err.message.includes("rejected our credentials")) {
+      throw err;
+    }
     throw new Error(
       `Cannot reach rclone at ${config.rcloneUrl}. Is "rclone rcd" running?\n${err}`,
     );
