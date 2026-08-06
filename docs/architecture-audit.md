@@ -3,6 +3,13 @@
 _Audit date: 2026-08-06, against the working tree (uncommitted changes included).
 Severity: 🔴 breaks correctness/production, 🟠 will bite soon, 🟡 smell/debt._
 
+> **Status update (same day):** every 🔴 and 🟠 finding below, plus quick 🟡
+> wins (D5, D6, parts of D1/D4/D7), was fixed in commit `996fff8` and
+> verified with a live upload/decode/retry smoke test. Remaining open items:
+> D1 (full transition-function refactor), D2 (jobEvents index/FK), D3
+> (status-order duplication), B6 (stat-based verification), and the rest of
+> D7. SSE progress (audit item E2) shipped in `2e63504`.
+
 ## A. Deployment & process-lifecycle (the big ones)
 
 ### A1 🔴 Crash recovery and config validation are dead code

@@ -51,7 +51,9 @@ art from the AAX during staging. That one enrichment step turns rows of
 
 ### The three moves, in order
 
-**Move 1 — Tell the truth about progress (fixes pains 1–3).**
+**Move 1 — Tell the truth about progress (fixes pains 1–3).** _(Shipped in
+commit `2e63504` — SSE stream, per-job stats, full-lifecycle cards that
+survive refreshes.)_
 - Add `/api/events`: a single SSE stream. Server-side, pipeline + watcher push
   job transitions and per-job rclone stats into a culvert `channel()`; the
   route is just `toReadableStream`. This is a *flagship* culvert use case —
