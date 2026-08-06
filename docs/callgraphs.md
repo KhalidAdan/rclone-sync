@@ -169,3 +169,26 @@ The ProgressRing component supports `ARCHIVING/VERIFYING/COMPLETED` stages,
 but the upload page only ever feeds it local XHR state — the server pipeline
 stages are dead UI states. That is the root of the "data pipeline across
 pages" pain.
+
+## Streaming a book (added 2026-08-06, post-library)
+
+```mermaid
+flowchart TD
+    A[Play click - Player mounts audio element] --> B[Browser: GET /api/stream/:id + Range header]
+    B --> C[api.stream.$jobId.ts loader]
+    C --> D["serveM4b() in download.server.ts<br/>parse Range, pick source"]
+    D -->|M4B still in staging| E["createReadStream(start, end)"]
+    D -->|archived in B2| F["spawn rclone cat --offset N --count M<br/>(killed on request.signal abort)"]
+    F --> G[crypt layer decrypts seekable 64KB blocks]
+    G --> H[B2 ranged GET - ciphertext only]
+    E --> I[206 Partial Content, audio/mp4, Content-Range]
+    F --> I
+    I -.->|every seek / resume / reconnect = new Range request| B
+```
+
+Key properties: no ffmpeg at play time (decode happened at ingest; the M4B
+is byte-identical to what the player needs), `+faststart` puts the moov
+atom first so metadata arrives in the first ranged read, and native HTTP
+Range semantics give scrubbing/resume/mobile-reconnect for free. The
+download endpoint (`/api/download/:id`) is the same path with
+`Content-Disposition: attachment`.
