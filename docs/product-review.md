@@ -140,9 +140,20 @@ Three nav items become one screen. Every click that exists today to answer
 > pipeline, Sync-with-B2 reconciliation (296 legacy AAX annotated), the
 > resumable migration job type, Range streaming from crypt, and the player
 > with localStorage resume — verified live end-to-end (stream + seek from
-> B2). Still open from Phase 3: chapter markers (needs ffprobe metadata,
-> Phase 2). Migration of the 296 books is queued up behind the "Migrate
-> 296 legacy AAX" button — deliberately left for Khalid to fire.
+> B2).
+>
+> **Migration executed same day**: all 296 legacy books converted to M4B
+> in B2 (~1 hour once the B2 download cap was raised; the cap fail-storm
+> led to the circuit-breaker + bulk-retry hardening in `12729bc`).
+>
+> **Phases 1+2 library core shipped** in `f95c1d7`: the index page is now
+> the Library (drop zone + live cards + cover-art bookshelf + search),
+> ffprobe metadata/covers/chapters (extracted at decode time, backfilled
+> for the archive from 24MB remote reads), and Player v2 with chapter
+> picker, 30s skips, and speed — 339/341 books fully dressed. Still open:
+> auto-organize/folder picker, dupe-row cleanup, jobs-page drawer, empty
+> states, Phase 4 culvert work (@culvert/cipher, activation-byte
+> derivation).
 | 4 | Make it culvert | activation-bytes auto-derivation from AAX header, `@culvert/cipher` design + integration, write the case-study blog post | open-ended |
 
 Phase 0 is non-negotiable before anything else — several fixes (recovery,
