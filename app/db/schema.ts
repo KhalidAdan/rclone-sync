@@ -44,6 +44,19 @@ export const jobs = sqliteTable("jobs", {
   // Exact size of the M4B, needed for Content-Length/Range when streaming.
   // Set when decode completes (local stat) or on reconcile (remote listing).
   m4bSizeBytes: integer("m4b_size_bytes"),
+  // Book metadata from ffprobe (at decode time, or backfilled from the
+  // first MBs of the remote M4B — faststart puts the moov atom up front).
+  title: text("title"),
+  author: text("author"),
+  narrator: text("narrator"),
+  durationSec: integer("duration_sec"),
+  // JSON array of { title, startSec }
+  chapters: text("chapters"),
+  // Set when a cover was extracted to data/covers/<id>.jpg
+  coverAt: text("cover_at"),
+  // Set whenever a probe ran (success or not) so backfill doesn't loop
+  // forever on books without usable metadata.
+  metaProbedAt: text("meta_probed_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

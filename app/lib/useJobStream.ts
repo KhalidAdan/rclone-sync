@@ -11,8 +11,45 @@ export interface StreamedJob {
   error: string | null;
   retryCount: number;
   downloadedAt: string | null;
+  origin: string;
+  archivedAs: string | null;
+  m4bSizeBytes: number | null;
+  title: string | null;
+  author: string | null;
+  narrator: string | null;
+  durationSec: number | null;
+  chapters: string | null;
+  coverAt: string | null;
+  metaProbedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface Chapter {
+  title: string;
+  startSec: number;
+}
+
+export function parseChapters(job: Pick<StreamedJob, "chapters">): Chapter[] {
+  if (!job.chapters) return [];
+  try {
+    const parsed = JSON.parse(job.chapters);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Display title: embedded metadata, else the filename cleaned up. */
+export function bookTitle(job: Pick<StreamedJob, "title" | "filename">): string {
+  return job.title || job.filename.replace(/\.(aax|m4b)$/i, "");
+}
+
+export function formatDuration(sec: number | null | undefined): string {
+  if (!sec || sec <= 0) return "";
+  const h = Math.floor(sec / 3600);
+  const m = Math.round((sec % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
 export interface StatsFrame {

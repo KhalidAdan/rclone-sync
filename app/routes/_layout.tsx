@@ -6,39 +6,29 @@ export default function Layout() {
     path === "/" ? location.pathname === "/" : location.pathname.startsWith(path);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white shadow-sm border-b">
+    <div className="min-h-dvh bg-white antialiased">
+      <nav className="border-b border-gray-950/5 bg-white">
         <div className="container mx-auto px-4">
-          <div className="flex items-center gap-6 h-14">
-            <Link to="/" className="text-xl font-semibold text-gray-900">
+          <div className="flex h-14 items-center gap-6">
+            <Link to="/" className="text-base font-semibold text-gray-900">
               Audiobook Archive
             </Link>
-            <div className="flex gap-4">
+            <div className="flex gap-1">
               <Link
                 to="/"
-                className={`px-3 py-2 rounded-md text-sm font-medium ${
-                  isActive("/") && location.pathname === "/"
-                    ? "bg-gray-100 text-gray-900"
+                className={`rounded-md px-3 py-2 text-sm font-medium ${
+                  isActive("/")
+                    ? "bg-gray-950/5 text-gray-900"
                     : "text-gray-600 hover:text-gray-900"
                 }`}
               >
-                Upload
-              </Link>
-              <Link
-                to="/archive"
-                className={`px-3 py-2 rounded-md text-sm font-medium ${
-                  isActive("/archive")
-                    ? "bg-gray-100 text-gray-900"
-                    : "text-gray-600 hover:text-gray-900"
-                }`}
-              >
-                Archive
+                Library
               </Link>
               <Link
                 to="/jobs"
-                className={`px-3 py-2 rounded-md text-sm font-medium ${
+                className={`rounded-md px-3 py-2 text-sm font-medium ${
                   isActive("/jobs")
-                    ? "bg-gray-100 text-gray-900"
+                    ? "bg-gray-950/5 text-gray-900"
                     : "text-gray-600 hover:text-gray-900"
                 }`}
               >

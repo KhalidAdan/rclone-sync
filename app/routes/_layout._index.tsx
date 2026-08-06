@@ -1,23 +1,40 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { desc } from "drizzle-orm";
+import { desc, eq, and, sql } from "drizzle-orm";
+import { Link } from "react-router";
+import { MagnifyingGlassIcon } from "@heroicons/react/16/solid";
 import { db } from "../db/client.server";
 import { jobs } from "../db/schema";
 import { FileCard, type CardJob } from "../components/FileCard";
 import { DropZone } from "../components/DropZone";
+import { BookGrid } from "../components/BookGrid";
+import { Player } from "../components/Player";
 import {
   useJobStream,
+  bookTitle,
   type StreamedJob,
   type StatsFrame,
 } from "../lib/useJobStream";
 
 export async function loader() {
+  // The whole shelf: every book with an M4B safe in B2.
+  const books = await db
+    .select()
+    .from(jobs)
+    .where(and(eq(jobs.status, "COMPLETED"), eq(jobs.archivedAs, "m4b")));
+
+  // Recent pipeline activity for the active-cards strip.
   const recentJobs = await db
     .select()
     .from(jobs)
     .orderBy(desc(jobs.createdAt))
     .limit(50);
 
-  return { recentJobs };
+  const [aaxResult] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(jobs)
+    .where(and(eq(jobs.status, "COMPLETED"), eq(jobs.archivedAs, "aax")));
+
+  return { books, recentJobs, aaxCandidateCount: aaxResult?.count ?? 0 };
 }
 
 type QueueItem = {
@@ -50,23 +67,30 @@ function parseJobError(job: StreamedJob): string | undefined {
   }
 }
 
-export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<typeof loader>> }) {
-  const { recentJobs } = loaderData;
+export default function Library({
+  loaderData,
+}: {
+  loaderData: Awaited<ReturnType<typeof loader>>;
+}) {
+  const { books, recentJobs, aaxCandidateCount } = loaderData;
 
   const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [destinationPath, setDestinationPath] = useState("");
+  const [search, setSearch] = useState("");
+  const [playing, setPlaying] = useState<StreamedJob | null>(null);
   const destinationPathRef = useRef("");
 
-  // Live server state: seeded from the loader, kept fresh by the SSE
-  // stream. This is what lets a card follow its book all the way to
-  // "Safe in B2" instead of lying "done" at upload-received.
+  // Live server state: seeded from the loader, kept fresh over SSE. Cards
+  // and the shelf both derive from this map, so covers and titles pop in
+  // as the metadata backfill works through the archive.
   const [serverJobs, setServerJobs] = useState<Map<string, StreamedJob>>(
-    () => new Map(recentJobs.map((j) => [j.id, j as StreamedJob])),
+    () =>
+      new Map(
+        [...(books as StreamedJob[]), ...(recentJobs as StreamedJob[])].map(
+          (j) => [j.id, j],
+        ),
+      ),
   );
   const [archiveStats, setArchiveStats] = useState<StatsFrame | null>(null);
-  // Jobs that transitioned while this page was open: keep their cards
-  // around even after they finish or fail, so the story completes on
-  // screen instead of the card vanishing mid-watch.
   const seenLiveRef = useRef<Set<string>>(new Set());
 
   useJobStream({
@@ -98,17 +122,21 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
     formData.append("file", pending.file);
-
     const localId = pending.localId;
+
     setQueue((prev) =>
-      prev.map((item) => (item.localId === localId ? { ...item, status: "uploading" } : item))
+      prev.map((item) =>
+        item.localId === localId ? { ...item, status: "uploading" } : item,
+      ),
     );
 
     xhr.upload.addEventListener("progress", (e) => {
       if (e.lengthComputable) {
         const percent = Math.round((e.loaded / e.total) * 100);
         setQueue((prev) =>
-          prev.map((item) => (item.localId === localId ? { ...item, uploadPercent: percent } : item))
+          prev.map((item) =>
+            item.localId === localId ? { ...item, uploadPercent: percent } : item,
+          ),
         );
       }
     });
@@ -121,14 +149,16 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
             prev.map((item) =>
               item.localId === localId
                 ? { ...item, status: "done", uploadPercent: 100, jobId }
-                : item
-            )
+                : item,
+            ),
           );
         } catch {
           setQueue((prev) =>
             prev.map((item) =>
-              item.localId === localId ? { ...item, status: "error", error: "Invalid response" } : item
-            )
+              item.localId === localId
+                ? { ...item, status: "error", error: "Invalid response" }
+                : item,
+            ),
           );
         }
       } else {
@@ -140,7 +170,9 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
           msg = xhr.statusText || msg;
         }
         setQueue((prev) =>
-          prev.map((item) => (item.localId === localId ? { ...item, status: "error", error: msg } : item))
+          prev.map((item) =>
+            item.localId === localId ? { ...item, status: "error", error: msg } : item,
+          ),
         );
       }
     });
@@ -148,30 +180,35 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
     xhr.addEventListener("error", () => {
       setQueue((prev) =>
         prev.map((item) =>
-          item.localId === localId ? { ...item, status: "error", error: "Network error" } : item
-        )
+          item.localId === localId
+            ? { ...item, status: "error", error: "Network error" }
+            : item,
+        ),
       );
     });
 
-    xhr.open("POST", "/api/upload?destinationPath=" + encodeURIComponent(destinationPathRef.current));
+    xhr.open(
+      "POST",
+      "/api/upload?destinationPath=" + encodeURIComponent(destinationPathRef.current),
+    );
     xhr.send(formData);
   }, []);
 
-  // Sequential upload driver: start the next pending upload whenever
-  // nothing is currently uploading.
   useEffect(() => {
     if (queue.length === 0) return;
     if (queue.some((item) => item.status === "uploading")) return;
     const pending = queue.find((item) => item.status === "pending");
-    if (pending) {
-      destinationPathRef.current = destinationPath;
-      uploadNext(queue);
-    }
-  }, [queue, destinationPath, uploadNext]);
+    if (pending) uploadNext(queue);
+  }, [queue, uploadNext]);
 
-  // --- Build the card list: local upload legs merged with server state ---
+  // --- Active pipeline cards: local upload legs merged with server state ---
 
   const queuedJobIds = new Set(queue.map((q) => q.jobId).filter(Boolean));
+  const uploadingLocalNames = new Set(
+    queue
+      .filter((q) => q.status === "uploading" || q.status === "pending")
+      .map((q) => q.file.name),
+  );
 
   const cardJobs: CardJob[] = queue.map((q) => {
     const server = q.jobId ? serverJobs.get(q.jobId) : undefined;
@@ -192,7 +229,12 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
         localId: q.localId,
         filename: q.file.name,
         sizeBytes: q.file.size,
-        stage: q.status === "uploading" ? "UPLOADING" : q.status === "done" ? "STAGED" : "PENDING",
+        stage:
+          q.status === "uploading"
+            ? "UPLOADING"
+            : q.status === "done"
+              ? "STAGED"
+              : "PENDING",
         uploadPercent: q.uploadPercent,
       };
     }
@@ -213,23 +255,14 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
     };
   });
 
-  // Server jobs still in flight that this tab isn't already showing —
-  // uploads from before a refresh, or another device. The pipeline
-  // shouldn't disappear just because the page reloaded.
-  //
-  // Exception: an UPLOADING server row whose filename matches one of our
-  // own in-flight uploads is *this tab's* upload — its jobId just hasn't
-  // come back from the XHR yet. Rendering it would show a ghost twin.
-  const uploadingLocalNames = new Set(
-    queue
-      .filter((q) => q.status === "uploading" || q.status === "pending")
-      .map((q) => q.file.name),
-  );
-
+  // Server jobs in flight that this tab isn't already showing (pre-refresh
+  // uploads, migrations, another device). Books that finish while watching
+  // leave the strip and appear on the shelf via the same map.
   const orphanCards: CardJob[] = [...serverJobs.values()]
     .filter(
       (j) =>
-        (ACTIVE_STATUSES.includes(j.status) || seenLiveRef.current.has(j.id)) &&
+        (ACTIVE_STATUSES.includes(j.status) ||
+          (seenLiveRef.current.has(j.id) && j.status.endsWith("_FAILED"))) &&
         !queuedJobIds.has(j.id) &&
         !(j.status === "UPLOADING" && uploadingLocalNames.has(j.filename)),
     )
@@ -251,79 +284,82 @@ export default function Upload({ loaderData }: { loaderData: Awaited<ReturnType<
 
   const allCards = [...cardJobs, ...orphanCards];
 
-  const doneCount = allCards.filter((c) => c.stage === "COMPLETED").length;
-  const failedCount = allCards.filter((c) => c.stage.endsWith("_FAILED")).length;
-  const activeCount = allCards.length - doneCount - failedCount;
+  // --- The shelf ---
 
-  const isUploading = queue.some((q) => q.status === "uploading");
+  const shelf = [...serverJobs.values()]
+    .filter((j) => j.status === "COMPLETED" && j.archivedAs === "m4b")
+    .sort((a, b) => bookTitle(a).localeCompare(bookTitle(b)));
+
+  const q = search.trim().toLowerCase();
+  const visibleBooks = q
+    ? shelf.filter((b) =>
+        [b.title, b.author, b.narrator, b.filename]
+          .filter(Boolean)
+          .some((f) => f!.toLowerCase().includes(q)),
+      )
+    : shelf;
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg)", fontFamily: "var(--font-sans)" }}>
-      <div style={{ maxWidth: 960, margin: "0 auto", padding: "48px 24px" }}>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 24 }}>
-          <div>
-            <h1 style={{ fontSize: 22, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.02em" }}>
-              Audiobook Archive
-            </h1>
-            <p style={{ fontSize: 13, color: "var(--text-tertiary)", marginTop: 4 }}>
-              Drop files below — they're safe once the ring closes
-            </p>
-          </div>
-          <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
-            {activeCount > 0 && (
-              <span style={{ color: "var(--ring-active)" }}>
-                {activeCount} in flight
-              </span>
+    <div className={playing ? "pb-32" : ""}>
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight text-balance text-gray-900">
+            Library
+          </h1>
+          <p className="text-base text-gray-500 sm:text-sm">
+            {shelf.length} books, encrypted in B2.
+            {aaxCandidateCount > 0 && (
+              <>
+                {" "}
+                <Link to="/jobs" className="text-teal-700 hover:text-teal-900">
+                  {aaxCandidateCount} awaiting migration
+                </Link>
+              </>
             )}
-            <span style={{ color: "var(--ring-done)" }}>
-              {doneCount} safe
-            </span>
-            {failedCount > 0 && (
-              <span style={{ color: "var(--ring-fail)" }}>
-                {failedCount} failed
-              </span>
-            )}
-          </div>
+          </p>
         </div>
-
-        <div style={{ marginBottom: 16 }}>
+        <div className="relative w-full max-w-xs">
+          <MagnifyingGlassIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 shrink-0 -translate-y-1/2 fill-gray-400" />
           <input
-            type="text"
-            placeholder="Destination folder (e.g. Fiction/Fantasy)"
-            value={destinationPath}
-            onChange={(e) => setDestinationPath(e.target.value)}
-            disabled={isUploading}
-            style={{
-              width: "100%",
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1.5px solid var(--border-idle)",
-              fontSize: 14,
-              outline: "none",
-              transition: "border-color 200ms",
-              background: "var(--card-bg)",
-              color: "var(--text-primary)",
-            }}
+            type="search"
+            name="search"
+            aria-label="Search books"
+            placeholder="Search title or author"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full rounded-md py-2 pr-3 pl-8 text-base text-gray-900 ring-1 ring-black/10 placeholder:text-gray-400 focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-teal-600 sm:py-1.5 sm:text-sm"
           />
         </div>
+      </div>
 
+      <div className="mb-8">
         <DropZone onFiles={handleFiles} />
+      </div>
 
-        {allCards.length > 0 && (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-              gap: 12,
-              marginTop: 24,
-            }}
-          >
+      {allCards.length > 0 && (
+        <div className="mb-10">
+          <h2 className="mb-3 text-sm font-medium text-gray-500">In flight</h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {allCards.map((job) => (
               <FileCard key={job.localId} job={job} />
             ))}
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {visibleBooks.length > 0 ? (
+        <BookGrid books={visibleBooks} onPlay={setPlaying} />
+      ) : shelf.length > 0 ? (
+        <p className="py-12 text-center text-base text-gray-400 sm:text-sm">
+          No books match “{search}”.
+        </p>
+      ) : (
+        <p className="py-12 text-center text-base text-gray-400 sm:text-sm">
+          Drop an AAX file above to archive your first book.
+        </p>
+      )}
+
+      {playing && <Player book={playing} onClose={() => setPlaying(null)} />}
     </div>
   );
 }

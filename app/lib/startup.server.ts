@@ -172,6 +172,11 @@ export async function recoverOrphanedJobs() {
   await startNextQueued();
   kickMigrationRunner();
 
+  // Backfill metadata/covers for archived books that don't have it yet
+  // (probes the first MBs of each remote M4B; runs once, sequentially).
+  const { kickMetadataBackfill } = await import("./metadata.server");
+  kickMetadataBackfill();
+
   // Sweep staging: any directory belonging to a COMPLETED job is dead
   // weight (B2 holds the M4B). Walk the actual directories rather than
   // all completed rows — imported rows never had staging.

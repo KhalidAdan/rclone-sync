@@ -2,6 +2,7 @@ import { desc, eq, sql, inArray, isNull, or, and } from "drizzle-orm";
 import React, { useState, useEffect, useRef } from "react";
 import { Form, useActionData, useRevalidator, useSearchParams } from "react-router";
 import { JobHistory } from "../components/JobHistory";
+import { Player } from "../components/Player";
 import { useJobStream, type StatsFrame } from "../lib/useJobStream";
 import { db } from "../db/client.server";
 import { jobs, jobEvents } from "../db/schema";
@@ -273,55 +274,7 @@ function formatEta(seconds: number) {
   return `${Math.round(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}m`;
 }
 
-type PlayerBook = { id: string; title: string };
-
-function PlayerBar({ book, onClose }: { book: PlayerBook; onClose: () => void }) {
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const lastSavedRef = useRef(0);
-  const storageKey = `playpos:${book.id}`;
-
-  return (
-    <div className="fixed bottom-0 inset-x-0 z-40 border-t border-gray-200 bg-white/95 backdrop-blur shadow-[0_-4px_16px_rgba(0,0,0,0.08)]">
-      <div className="max-w-4xl mx-auto flex items-center gap-3 px-4 py-3">
-        <span className="text-sm font-medium text-gray-800 truncate max-w-[16rem]" title={book.title}>
-          {book.title}
-        </span>
-        {/* eslint-disable-next-line jsx-a11y/media-has-caption -- audiobook stream, no caption track exists */}
-        <audio
-          ref={audioRef}
-          controls
-          autoPlay
-          preload="metadata"
-          src={`/api/stream/${book.id}`}
-          className="flex-1 h-10"
-          onLoadedMetadata={() => {
-            const saved = Number(localStorage.getItem(storageKey) || 0);
-            if (audioRef.current && saved > 5) {
-              audioRef.current.currentTime = saved;
-            }
-          }}
-          onTimeUpdate={() => {
-            const t = audioRef.current?.currentTime ?? 0;
-            if (Math.abs(t - lastSavedRef.current) >= 5) {
-              lastSavedRef.current = t;
-              localStorage.setItem(storageKey, String(Math.floor(t)));
-            }
-          }}
-        />
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close player"
-          className="shrink-0 rounded-full p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-        >
-          <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-    </div>
-  );
-}
+type PlayingJob = Parameters<typeof Player>[0]["book"];
 
 export default function Jobs({ loaderData }: { loaderData: Awaited<ReturnType<typeof loader>> }) {
   const { jobs: allJobs, liveProgress, page, totalPages, totalCount, limit, hasPrev, hasNext, downloadableCount, aaxCandidateCount } = loaderData;
@@ -331,7 +284,7 @@ export default function Jobs({ loaderData }: { loaderData: Awaited<ReturnType<ty
 
   const [expandedStates, setExpandedStates] = useState<Set<string>>(new Set(Object.keys(statusOrder)));
   const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set());
-  const [playing, setPlaying] = useState<PlayerBook | null>(null);
+  const [playing, setPlaying] = useState<PlayingJob | null>(null);
 
   const hasActiveJob = allJobs.some((j) =>
     ["UPLOADING", "STAGED", "DECODING", "QUEUED", "ARCHIVING", "VERIFYING", "RESTORING", "RESTORE_QUEUED"].includes(j.status)
@@ -630,7 +583,7 @@ export default function Jobs({ loaderData }: { loaderData: Awaited<ReturnType<ty
                                     <>
                                       <button
                                         type="button"
-                                        onClick={() => setPlaying({ id: job.id, title: m4bTitle(job.filename) })}
+                                        onClick={() => setPlaying(job)}
                                         className="text-xs font-medium text-teal-600 hover:text-teal-800"
                                       >
                                         Play
@@ -735,7 +688,7 @@ export default function Jobs({ loaderData }: { loaderData: Awaited<ReturnType<ty
         </div>
       )}
 
-      {playing && <PlayerBar book={playing} onClose={() => setPlaying(null)} />}
+      {playing && <Player book={playing} onClose={() => setPlaying(null)} />}
     </div>
   );
 }

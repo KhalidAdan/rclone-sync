@@ -56,6 +56,11 @@ async function runDecodeStep(jobId: string, filename: string): Promise<boolean> 
 
     await logJobEvent(jobId, "decoded", `Decoded to ${outputFilename}`);
 
+    // Metadata + cover while the file is local — cheap, and the library
+    // card is fully dressed by the time the book completes.
+    const { probeLocalAndApply } = await import("./metadata.server");
+    await probeLocalAndApply(jobId, outputPath);
+
     logger.info("[pipeline.runDecodeStep] Decode succeeded, starting archive:", { jobId });
     await startOrQueueArchive(jobId);
 
