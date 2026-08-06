@@ -131,11 +131,17 @@ export async function loader({ request }: { request: Request }) {
     );
   const downloadableCount = downloadableCountResult?.count ?? 0;
 
-  // Legacy AAX-only books in B2 — migration candidates.
+  // Legacy AAX-only books in B2 — migration candidates (including books
+  // whose earlier restore attempt failed).
   const [aaxCandidateResult] = await db
     .select({ count: sql<number>`count(*)` })
     .from(jobs)
-    .where(and(eq(jobs.status, "COMPLETED"), eq(jobs.archivedAs, "aax")));
+    .where(
+      or(
+        and(eq(jobs.status, "COMPLETED"), eq(jobs.archivedAs, "aax")),
+        eq(jobs.status, "RESTORE_FAILED")
+      )
+    );
   const aaxCandidateCount = aaxCandidateResult?.count ?? 0;
 
   const archiving = jobsWithEvents.find((j) => j.status === "ARCHIVING");

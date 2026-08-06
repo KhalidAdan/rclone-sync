@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, or } from "drizzle-orm";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { db, type Job } from "../db/client.server";
@@ -49,10 +49,17 @@ export async function enqueueMigration(jobId: string): Promise<boolean> {
 }
 
 export async function enqueueAllMigrations(): Promise<number> {
+  // Fresh candidates AND previously failed restores — "migrate all"
+  // should always mean "get everything to M4B", including retries.
   const candidates = await db
     .select()
     .from(jobs)
-    .where(and(eq(jobs.status, "COMPLETED"), eq(jobs.archivedAs, "aax")));
+    .where(
+      or(
+        and(eq(jobs.status, "COMPLETED"), eq(jobs.archivedAs, "aax")),
+        eq(jobs.status, "RESTORE_FAILED"),
+      ),
+    );
 
   let queued = 0;
   const now = new Date().toISOString();
@@ -91,11 +98,30 @@ async function runLoop() {
       .limit(1);
 
     if (!next) break;
-    await migrateOne(next);
+
+    const outcome = await migrateOne(next);
+    if (outcome === "halt") {
+      logger.warn(
+        "[migration.runner] Halting queue on systemic error — remaining books stay RESTORE_QUEUED. " +
+          "Fix the cause (B2 cap / rclone auth) and press Migrate again.",
+      );
+      break;
+    }
   }
 }
 
-async function migrateOne(job: Job) {
+/**
+ * Errors that will hit every book identically (B2 download cap, bad rclone
+ * credentials, daemon down). Failing one book on these is misleading and
+ * failing 200 is a stampede — the queue should pause instead.
+ */
+function isSystemicError(message: string): boolean {
+  return /cap exceeded|download_cap|unauthorized|\b401\b|\b403\b|lost contact with rclone/i.test(
+    message,
+  );
+}
+
+async function migrateOne(job: Job): Promise<"continue" | "halt"> {
   logger.info("[migration.migrateOne] Starting:", { jobId: job.id, filename: job.filename });
 
   try {
@@ -109,7 +135,7 @@ async function migrateOne(job: Job) {
         .set({ status: "VERIFYING", updatedAt: new Date().toISOString() })
         .where(eq(jobs.id, job.id));
       await finishVerification(job.id);
-      return;
+      return "continue";
     }
 
     await db
@@ -134,9 +160,26 @@ async function migrateOne(job: Job) {
     // Normal pipeline from here: decode -> archive M4B -> verify. The
     // archive queue serializes uploads; the next restore may overlap.
     await processJob(job.id);
+    return "continue";
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error("[migration.migrateOne] Failed:", { jobId: job.id, error: message });
+
+    if (isSystemicError(message)) {
+      // Not this book's fault — put it back in the queue and pause the
+      // whole run rather than failing every remaining book the same way.
+      await db
+        .update(jobs)
+        .set({ status: "RESTORE_QUEUED", updatedAt: new Date().toISOString() })
+        .where(eq(jobs.id, job.id));
+      await logJobEvent(
+        job.id,
+        "restoring",
+        `Migration paused (systemic error, will retry): ${message}`,
+      );
+      return "halt";
+    }
+
     await db
       .update(jobs)
       .set({
@@ -146,6 +189,7 @@ async function migrateOne(job: Job) {
       })
       .where(eq(jobs.id, job.id));
     await logJobEvent(job.id, "failed", `Restore failed: ${message}`);
+    return "continue";
   }
 }
 
