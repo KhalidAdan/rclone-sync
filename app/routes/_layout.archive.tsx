@@ -1,30 +1,25 @@
-import { useLoaderData } from "react-router";
-import type { Route } from "./+types/_layout.archive";
-import { listFiles } from "../lib/rclone.server";
 import { config } from "../lib/config.server";
 import { logger } from "../lib/logger.server";
+import { listFiles } from "../lib/rclone.server";
+import type { Route } from "./+types/_layout.archive";
 
-interface FileEntry {
-  Name: string;
-  Size: string;
-  ModTime: string;
-  IsDir: boolean;
-}
+import type { RcloneListEntry } from "../lib/rclone.server";
 
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const dir = url.searchParams.get("dir") || "";
 
-    try {
-    const fsPath = dir 
-      ? `${config.rcloneRemote}${dir}`
-      : config.rcloneRemote;
-    
-    logger.debug("[archive.loader] Calling listFiles with:", { fs: fsPath, remote: "" });
-    
+  try {
+    const fsPath = dir ? `${config.rcloneRemote}${dir}` : config.rcloneRemote;
+
+    logger.debug("[archive.loader] Calling listFiles with:", {
+      fs: fsPath,
+      remote: "",
+    });
+
     const { list } = await listFiles(fsPath, "");
     logger.debug("[archive.loader] List result:", { count: list?.length });
-    
+
     return { entries: list || [], remote: dir };
   } catch (err) {
     logger.error("[archive.loader] Error:", { error: String(err) });
@@ -35,11 +30,11 @@ export async function loader({ request }: Route.LoaderArgs) {
 export default function Archive({ loaderData }: Route.ComponentProps) {
   const { entries, remote, error } = loaderData;
 
-  const formatSize = (size: string) => {
-    const bytes = parseInt(size, 10);
+  const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    if (bytes < 1024 * 1024 * 1024)
+      return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
     return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
   };
 
@@ -55,7 +50,7 @@ export default function Archive({ loaderData }: Route.ComponentProps) {
     const parts = remote.split("/").filter(Boolean);
     parts.pop();
     const newDir = parts.join("/");
-    window.location.href = `/archive${newDir ? `?dir=${newDir}` : ""}`;
+    window.location.href = `/archive${newDir ? `?dir=${encodeURIComponent(newDir)}` : ""}`;
   };
 
   return (
@@ -97,12 +92,14 @@ export default function Archive({ loaderData }: Route.ComponentProps) {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {entries.map((entry: FileEntry) => {
-                const fullPath = remote ? `${remote}/${entry.Name}` : entry.Name;
-                const href = entry.IsDir 
-                  ? `/archive?dir=${fullPath}` 
+              {entries.map((entry: RcloneListEntry) => {
+                const fullPath = remote
+                  ? `${remote}/${entry.Name}`
+                  : entry.Name;
+                const href = entry.IsDir
+                  ? `/archive?dir=${encodeURIComponent(fullPath)}`
                   : "#";
-                
+
                 return (
                   <tr key={entry.Name} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -114,9 +111,7 @@ export default function Archive({ loaderData }: Route.ComponentProps) {
                           📁 {entry.Name}
                         </a>
                       ) : (
-                        <span className="text-gray-900">
-                          📄 {entry.Name}
-                        </span>
+                        <span className="text-gray-900">📄 {entry.Name}</span>
                       )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-500">

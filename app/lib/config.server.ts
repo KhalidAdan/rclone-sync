@@ -16,10 +16,16 @@ export const config = {
 
   rcloneUrl: process.env.RCLONE_URL,
   rcloneRemote: process.env.RCLONE_REMOTE,
+  rcloneUser: process.env.RCLONE_USER,
+  rclonePass: process.env.RCLONE_PASS,
+
+  activationBytes: process.env.ACTIVATION_BYTES,
 
   logLevel: process.env.LOG_LEVEL,
   port: process.env.PORT,
-  uiRefreshIntervalSec: parseInt(process.env.UI_REFRESH_INTERVAL_SEC || "3", 10),
+  // Note: process.env values are strings at runtime regardless of the zod
+  // schema's coercion (the parsed copy is discarded) — Number() handles both.
+  uiRefreshIntervalSec: Number(process.env.UI_REFRESH_INTERVAL_SEC ?? 3) || 3,
 } as const;
 
 export async function validateConfig() {
@@ -36,12 +42,28 @@ export async function validateConfig() {
   });
 
   try {
+    const headers: Record<string, string> = {};
+    if (config.rcloneUser && config.rclonePass) {
+      const token = Buffer.from(`${config.rcloneUser}:${config.rclonePass}`).toString("base64");
+      headers["Authorization"] = `Basic ${token}`;
+    }
     const res = await fetch(`${config.rcloneUrl}/core/version`, {
       method: "POST",
+      headers,
       signal: AbortSignal.timeout(5000),
     });
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        `rclone at ${config.rcloneUrl} rejected our credentials (${res.status}). ` +
+          `Start the daemon with "rclone rcd --rc-no-auth", or set ` +
+          `RCLONE_USER/RCLONE_PASS in .env to match --rc-user/--rc-pass.`,
+      );
+    }
     if (!res.ok) throw new Error(`rclone returned ${res.status}`);
   } catch (err) {
+    if (err instanceof Error && err.message.includes("rejected our credentials")) {
+      throw err;
+    }
     throw new Error(
       `Cannot reach rclone at ${config.rcloneUrl}. Is "rclone rcd" running?\n${err}`,
     );

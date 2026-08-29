@@ -1,92 +1,112 @@
-import { eq } from "drizzle-orm";
+import { eq, ne, and } from "drizzle-orm";
 import * as path from "path";
 import { db } from "../db/client.server";
-import { jobs, jobEvents } from "../db/schema";
-import { watchJob } from "./jobWatcher.server";
+import { jobs } from "../db/schema";
+import { logJobEvent } from "./jobEvents.server";
+import { m4bNameOf } from "./types";
+import { watchJob, startNextQueued } from "./jobWatcher.server";
+import { copyFile } from "./rclone.server";
 import { config } from "./config.server";
 import { logger } from "./logger.server";
 
-async function logJobEvent(jobId: string, eventType: "created" | "queued" | "archiving" | "verifying" | "completed" | "failed" | "abandoned", message: string) {
-  const now = new Date().toISOString();
-  await db.insert(jobEvents).values({
-    jobId,
-    eventType,
-    message,
-    timestamp: now,
+/**
+ * Atomically claim the single archive slot. Exactly one job may hold
+ * status ARCHIVING; the check and the claim happen in one synchronous
+ * SQLite transaction, so two callers can never both claim.
+ *
+ * Returns true if `id` now holds the slot, false if it was queued.
+ */
+function claimArchiveSlot(id: string): boolean {
+  return db.transaction((tx) => {
+    const now = new Date().toISOString();
+    const active = tx
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(eq(jobs.status, "ARCHIVING"), ne(jobs.id, id)))
+      .limit(1)
+      .all();
+
+    if (active.length > 0) {
+      tx.update(jobs)
+        .set({ status: "QUEUED", updatedAt: now })
+        .where(eq(jobs.id, id))
+        .run();
+      return false;
+    }
+
+    tx.update(jobs)
+      .set({ status: "ARCHIVING", rcloneJobId: null, updatedAt: now })
+      .where(eq(jobs.id, id))
+      .run();
+    return true;
   });
 }
 
 export async function startOrQueueArchive(id: string) {
   logger.info("[archiver.startOrQueueArchive] Job ID:", { jobId: id });
-  
-  const active = await db
-    .select()
-    .from(jobs)
-    .where(eq(jobs.status, "ARCHIVING"))
-    .limit(1);
 
-  logger.debug("[archiver.startOrQueueArchive] Active jobs:", { count: active.length });
-
-  if (active.length > 0) {
-    logger.info("[archiver.startOrQueueArchive] Job queued, another is archiving");
-    await db
-      .update(jobs)
-      .set({ status: "QUEUED", updatedAt: new Date().toISOString() })
-      .where(eq(jobs.id, id));
+  if (!claimArchiveSlot(id)) {
+    logger.info("[archiver.startOrQueueArchive] Job queued, another is archiving", { jobId: id });
     await logJobEvent(id, "queued", "Job queued - waiting for previous archive to complete");
     return;
   }
 
-  await startArchiveJob(id);
+  await launchArchive(id);
 }
 
-export async function startArchiveJob(id: string) {
-  logger.info("[archiver.startArchiveJob] Starting archive for job:", { jobId: id });
-  
+/**
+ * Start the rclone copy for a job that already holds the ARCHIVING slot.
+ * On failure the job is marked ARCHIVE_FAILED and the next queued job starts,
+ * so a bad job can never wedge the queue.
+ */
+async function launchArchive(id: string) {
   const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
   if (!job) {
-    logger.error("[archiver.startArchiveJob] Job not found:", { jobId: id });
+    logger.error("[archiver.launchArchive] Job not found:", { jobId: id });
     return;
   }
 
-  logger.debug("[archiver.startArchiveJob] Job details:", {
-    id: job.id,
-    filename: job.filename,
-    sizeBytes: job.sizeBytes,
-    destinationPath: job.destinationPath,
-  });
-
+  // The M4B is the archived asset: playable forever without activation
+  // bytes, encrypted at rest by the crypt remote. The uploaded AAX is a
+  // staging-only artifact and never leaves the box.
+  const m4bName = m4bNameOf(job.filename);
   const srcFs = path.join(config.stagingDir, id) + path.sep;
-  const srcRemote = job.filename;
+  const srcRemote = m4bName;
   const dstFs = config.rcloneRemote;
-  const dstRemote = `${job.destinationPath}${job.filename}`;
+  const dstRemote = `${job.destinationPath}${m4bName}`;
 
-  logger.debug("[archiver.startArchiveJob] rclone copyfile params:", {
+  logger.debug("[archiver.launchArchive] rclone copyfile params:", {
     srcFs,
     srcRemote,
     dstFs,
     dstRemote,
   });
 
-  const { copyFile } = await import("./rclone.server");
-  
   try {
     const { jobid } = await copyFile(srcFs, srcRemote, dstFs, dstRemote);
-    logger.info("[archiver.startArchiveJob] rclone job started, jobid:", { jobid, rcloneJobId: jobid });
+    logger.info("[archiver.launchArchive] rclone job started:", { jobId: id, rcloneJobId: jobid });
 
     await db
       .update(jobs)
-      .set({
-        status: "ARCHIVING",
-        rcloneJobId: jobid,
-        updatedAt: new Date().toISOString(),
-      })
+      .set({ rcloneJobId: jobid, updatedAt: new Date().toISOString() })
       .where(eq(jobs.id, id));
 
     await logJobEvent(id, "archiving", `Archive started - copying to ${dstRemote}`);
     watchJob(id, jobid);
   } catch (err) {
-    logger.error("[archiver.startArchiveJob] Error starting archive:", { error: String(err) });
-    throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error("[archiver.launchArchive] Error starting archive:", { jobId: id, error: message });
+
+    await db
+      .update(jobs)
+      .set({
+        status: "ARCHIVE_FAILED",
+        error: JSON.stringify({ phase: "ARCHIVING", message: `Failed to start rclone copy: ${message}` }),
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(jobs.id, id));
+
+    await logJobEvent(id, "failed", `Archive failed to start: ${message}`);
+    await startNextQueued();
   }
 }

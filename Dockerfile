@@ -15,19 +15,29 @@ WORKDIR /app
 RUN npm run build
 
 FROM node:20-alpine
+# ffmpeg: AAX -> M4B decode step. rclone CLI: streaming/download reads
+# straight from the crypt remote (`rclone cat`); mount your rclone.conf
+# into the container (e.g. RCLONE_CONFIG=/config/rclone.conf).
+RUN apk add --no-cache ffmpeg rclone
+
 COPY ./package.json package-lock.json /app/
 COPY --from=production-dependencies-env /app/node_modules /app/node_modules
 COPY --from=build-env /app/build /app/build
-
-# Copy drizzle-kit for migrations (needed at startup)
-COPY --from=build-env /app/node_modules/drizzle-kit /app/node_modules/drizzle-kit
-COPY --from=build-env /app/node_modules/drizzle-orm /app/node_modules/drizzle-orm
+# SQL migrations are applied by the app at boot (see db/client.server.ts) —
+# no drizzle-kit needed in the image
+COPY ./drizzle /app/drizzle
 
 WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=3001
+ENV DATA_DIR=/data
 
 EXPOSE 3001
 
 VOLUME ["/data"]
 
-# Run db:push to create tables, then start the app
-CMD ["sh", "-c", "npm run db:push && npm run start"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
+  CMD wget -qO /dev/null http://127.0.0.1:3001/ || exit 1
+
+CMD ["npm", "run", "start"]

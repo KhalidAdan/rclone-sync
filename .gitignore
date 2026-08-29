@@ -11,3 +11,9 @@
 *.db
 *.db-shm
 *.db-wal
+
+# ui.sh skills (token-fetched) + local claude config
+.claude/
+
+# local worktrees
+.worktrees/

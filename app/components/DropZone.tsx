@@ -8,23 +8,29 @@ export function DropZone({ onFiles }: DropZoneProps) {
   const [over, setOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const filterAaxFiles = useCallback((files: File[]): File[] => {
+    return files.filter((f) => f.name.toLowerCase().endsWith(".aax"));
+  }, []);
+
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       setOver(false);
       const files = Array.from(e.dataTransfer?.files || []);
-      if (files.length) onFiles(files);
+      const aaxFiles = filterAaxFiles(files);
+      if (aaxFiles.length) onFiles(aaxFiles);
     },
-    [onFiles]
+    [onFiles, filterAaxFiles]
   );
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(e.target.files || []);
-      if (files.length) onFiles(files);
+      const aaxFiles = filterAaxFiles(files);
+      if (aaxFiles.length) onFiles(aaxFiles);
       if (e.target) e.target.value = "";
     },
-    [onFiles]
+    [onFiles, filterAaxFiles]
   );
 
   return (
@@ -50,6 +56,7 @@ export function DropZone({ onFiles }: DropZoneProps) {
         ref={inputRef}
         type="file"
         multiple
+        accept=".aax"
         style={{ display: "none" }}
         onChange={handleChange}
       />
@@ -79,7 +86,7 @@ export function DropZone({ onFiles }: DropZoneProps) {
         Drop audiobooks here or click to browse
       </p>
       <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 4 }}>
-        .aax, .mp3, .m4b, and more
+        .aax files only
       </p>
     </div>
   );
