@@ -15,19 +15,19 @@
     "@culvert/stream": "^0.1.1",
     "@culvert/zip": "^0.1.1",
     "@heroicons/react": "^2.2.0",
-    "@react-router/node": "7.14.0",
-    "@react-router/serve": "7.14.0",
+    "@react-router/node": "7.18.3",
+    "@react-router/serve": "7.18.3",
     "@remix-run/form-data-parser": "^0.16.0",
     "better-sqlite3": "^12.8.0",
     "drizzle-orm": "^0.45.2",
     "isbot": "^5.1.36",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react-router": "7.14.0",
+    "react-router": "7.18.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@react-router/dev": "7.14.0",
+    "@react-router/dev": "7.18.3",
     "@tailwindcss/vite": "^4.2.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22",
@@ -38,5 +38,13 @@
     "typescript": "^5.9.3",
     "vite": "^8.0.3",
     "vite-tsconfig-paths": "^6.1.1"
+  },
+  "overrides": {
+    "drizzle-kit": {
+      "esbuild": "^0.25.0"
+    },
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.0"
+    }
   }
 }
